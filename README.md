@@ -31,6 +31,7 @@ Optional overrides:
 - `OPENAI_BASE_URL` (default `https://api.openai.com/v1`)
 - `OPENROUTER_BASE_URL` (default `https://openrouter.ai/api/v1`)
 - `PORT` (default `3000`)
+- `BIND_ADDRESS` (default `127.0.0.1`)
 - `VERBOSE_LOGGING` (`true` to enable request/response logging)
 
 ## Run

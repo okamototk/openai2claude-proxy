@@ -110,6 +110,7 @@ const CONFIG = {
   defaultUpstreamModel: defaultModelMapping.upstream,
   defaultDownstreamModel: defaultModelMapping.downstream,
   port: Number(process.env.PORT || "3000"),
+  bindAddress: process.env.BIND_ADDRESS || "127.0.0.1",
   verboseLogging: (process.env.VERBOSE_LOGGING || "").toLowerCase() === "true",
 };
 
@@ -155,6 +156,7 @@ const getPublicConfig = () => ({
   openaiBaseUrl: CONFIG.openaiBaseUrl,
   openrouterBaseUrl: CONFIG.openrouterBaseUrl,
   port: CONFIG.port,
+  bindAddress: CONFIG.bindAddress,
   hasUpstreamApiKey: Boolean(upstream.apiKey),
   verboseLogging: CONFIG.verboseLogging,
 });
@@ -329,6 +331,7 @@ await checkUpstreamModels();
 await checkToolChoiceSupport();
 
 const server = Bun.serve({
+  hostname: CONFIG.bindAddress,
   port: CONFIG.port,
   fetch: (req) => {
     const url = new URL(req.url);
@@ -355,4 +358,4 @@ const server = Bun.serve({
 });
 
 console.log("Proxy config:", JSON.stringify(getPublicConfig(), null, 2));
-console.log(`openai2claude-proxy listening on http://localhost:${server.port}`);
+console.log(`openai2claude-proxy listening on http://${CONFIG.bindAddress}:${server.port}`);
