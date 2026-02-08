@@ -84,7 +84,7 @@ bun src/index.ts -m gpt-5.2-codex
 bun src/index.ts --model gpt-5.3-codex:gpt-5.2-codex
 
 # escape ':' in model names
-bun src/index.ts --model arcee-ai/trinity-mini\:free:destmodel
+bun src/index.ts --model openai/gpt-oss-120b\\:free
 ```
 
 If no model is provided, the server defaults to `gpt-5.2-codex` for both upstream and downstream.
