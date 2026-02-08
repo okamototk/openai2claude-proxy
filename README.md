@@ -8,10 +8,22 @@ This guide use Bun for run proxy.
 
 
 ## Install Runtime
+
+macOS:
 ```bash
 brew install node
 brew install bun
 ```
+
+Linux (Debian/Ubuntu):
+```bash
+sudo apt-get update
+sudo apt-get install -y nodejs npm
+curl -fsSL https://bun.sh/install | bash
+```
+
+Windows:
+Use WSL (Windows Subsystem for Linux) and follow the Linux steps above.
 
 Note: openai2calude-proxy is executed by bun to run TypeScript code. But need npx(node) to fetch code from GitHub repository.
 
