@@ -2,6 +2,10 @@
   "name": "openai2claude-proxy",
   "private": true,
   "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "openai2claude-proxy": "./src/index.ts"
+  },
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest"

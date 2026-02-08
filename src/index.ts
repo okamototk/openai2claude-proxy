@@ -1,3 +1,5 @@
+#!/usr/bin/env bun
+
 import { 
   mapOpenAIToAnthropic, 
   mapAnthropicToOpenAI,

@@ -7,10 +7,13 @@ openai2claude-proxy is a minimal Anthropic-compatible proxy that forwards `/v1/m
 This guide use Bun for run proxy.
 
 
-## Install
+## Install Runtime
 ```bash
+brew install node
 brew install bun
 ```
+
+Note: openai2calude-proxy is executed by bun to run TypeScript code. But need npx(node) to fetch code from GitHub repository.
 
 ## Configure
 Set env vars (example for OpenAI):
@@ -32,7 +35,7 @@ Optional overrides:
 
 ## Run
 ```bash
-bunx github:okamototk/openai2claude-proxy --model gpt-5.2-codex
+npx https://github.com/okamototk/openai2claude-proxy --model gpt-5.2-codex
 ```
 
 ## Claude Code Configuration
