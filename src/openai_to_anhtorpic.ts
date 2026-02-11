@@ -507,7 +507,9 @@ export const mapAnthropicToOpenAI = (
   }
 
   // Responses endpoint expects max_output_tokens (OpenAI/OpenRouter).
-  const tokenParam = { max_output_tokens: req.max_tokens };
+  const tokenParam = {
+    max_output_tokens: req.max_tokens !== undefined ? Math.max(16, req.max_tokens) : undefined,
+  };
 
   const thinkingBudget = req.thinking && "budget_tokens" in req.thinking
     ? req.thinking.budget_tokens
