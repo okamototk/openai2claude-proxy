@@ -1,12 +1,12 @@
 #!/usr/bin/env bun
 
 import {
-  mapOpenAIToAnthropic,
-  mapAnthropicToOpenAI,
-  createAnthropicStream,
-  type AnthropicRequest,
+  mapOpenAIToClaude,
+  mapClaudeToOpenAI,
+  createClaudeStream,
+  type ClaudeRequest,
   type OpenAIResponse,
-} from "./openai_to_anhtorpic";
+} from "./openai_to_claude";
 import { buildConfig, buildUpstream, getModelMapping, getPublicConfig } from "./config";
 const CONFIG = buildConfig(process.env, process.argv);
 const upstream = buildUpstream(CONFIG);
@@ -43,7 +43,7 @@ const handleHealth = () => jsonResponse({ status: "ok" });
 const handleConfig = () => jsonResponse(getPublicConfig(CONFIG, upstream));
 
 const handleMessages = async (req: Request) => {
-  const payload = (await req.json()) as AnthropicRequest;
+  const payload = (await req.json()) as ClaudeRequest;
 
   logVerbose("----------------------");
   logVerbose("[messages] Downstream request parameters:", JSON.stringify(payload, null, 2));
@@ -58,7 +58,7 @@ const handleMessages = async (req: Request) => {
     return jsonResponse({ error: `Model not allowed: '${downstreamModel}'`, allowedModels }, 400);
   }
 
-  const openaiPayload = mapAnthropicToOpenAI(payload, mapping.upstream);
+  const openaiPayload = mapClaudeToOpenAI(payload, mapping.upstream);
 
   logVerbose("----------------------");
   logVerbose("[messages] Upstream request parameters:", JSON.stringify(openaiPayload, null, 2));
@@ -101,7 +101,7 @@ const handleMessages = async (req: Request) => {
   }
 
   if (payload.stream) {
-    const stream = await createAnthropicStream(upstreamResp.body, mapping.downstream);
+    const stream = await createClaudeStream(upstreamResp.body, mapping.downstream);
     return new Response(stream, {
       status: 200,
       headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
@@ -111,10 +111,10 @@ const handleMessages = async (req: Request) => {
   const openaiData = (await upstreamResp.json()) as OpenAIResponse;
   logVerbose("[messages] Upstream response data:", JSON.stringify(openaiData, null, 2));
 
-  const anthropicData = mapOpenAIToAnthropic(openaiData, mapping.downstream);
-  logVerbose("[messages] Downstream response data:", JSON.stringify(anthropicData, null, 2));
+  const claudeData = mapOpenAIToClaude(openaiData, mapping.downstream);
+  logVerbose("[messages] Downstream response data:", JSON.stringify(claudeData, null, 2));
 
-  return jsonResponse(anthropicData);
+  return jsonResponse(claudeData);
 };
 
 const notFound = () => jsonResponse({ error: "Not found" }, 404);

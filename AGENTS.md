@@ -2,7 +2,7 @@
 
 ## Model Context Windows
 
-This project uses an Anthropic-to-OpenAI API proxy. When the upstream model name matches one of the GPT-5 series keys below, the proxy maps `max_tokens` to `max_output_tokens` and uses the specified limits.
+This project uses an Claude-to-OpenAI API proxy. When the upstream model name matches one of the GPT-5 series keys below, the proxy maps `max_tokens` to `max_output_tokens` and uses the specified limits.
 
 ### GPT-5 Series Token Limits
 
@@ -59,5 +59,11 @@ bun src/index.ts --model gpt-5.3-codex:gpt-5.2-codex
 
 - `GET /health` - Health check
 - `GET /` - Config info
-- `POST /v1/messages` - Anthropic-compatible messages endpoint
+- `POST /v1/messages` - Claude-compatible messages endpoint
 - `GET /v1/models` - List models
+
+### References
+
+- OpenAI API: https://developers.openai.com/api/reference/resources/responses/methods/create
+- Claude API: https://platform.claude.com/docs/en/api/messages
+- Gemini API: https://ai.google.dev/gemini-api/docs/text-generation?hl=ja#rest

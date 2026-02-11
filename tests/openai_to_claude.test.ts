@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mapAnthropicToOpenAI, mapFinishReason, mapOpenAIToAnthropic } from "../src/openai_to_anhtorpic";
+import { mapClaudeToOpenAI, mapFinishReason, mapOpenAIToClaude } from "../src/openai_to_claude";
 
 describe("mapFinishReason", () => {
   it("maps known reasons", () => {
@@ -14,7 +14,7 @@ describe("mapFinishReason", () => {
   });
 });
 
-describe("mapOpenAIToAnthropic", () => {
+describe("mapOpenAIToClaude", () => {
   it("converts a basic response message", () => {
     const openaiResponse = {
       id: "resp_1",
@@ -33,14 +33,14 @@ describe("mapOpenAIToAnthropic", () => {
       usage: { input_tokens: 5, output_tokens: 7 },
     } as const;
 
-    const anthropic = mapOpenAIToAnthropic(openaiResponse, "gpt-5.2-codex");
+    const claude = mapOpenAIToClaude(openaiResponse, "gpt-5.2-codex");
 
-    expect(anthropic.id).toBe("resp_1");
-    expect(anthropic.role).toBe("assistant");
-    expect(anthropic.content).toEqual([{ type: "text", text: "hello" }]);
-    expect(anthropic.stop_reason).toBe("end_turn");
-    expect(anthropic.usage?.input_tokens).toBe(5);
-    expect(anthropic.usage?.output_tokens).toBe(7);
+    expect(claude.id).toBe("resp_1");
+    expect(claude.role).toBe("assistant");
+    expect(claude.content).toEqual([{ type: "text", text: "hello" }]);
+    expect(claude.stop_reason).toBe("end_turn");
+    expect(claude.usage?.input_tokens).toBe(5);
+    expect(claude.usage?.output_tokens).toBe(7);
   });
 
   it("maps reasoning blocks to thinking content", () => {
@@ -65,9 +65,9 @@ describe("mapOpenAIToAnthropic", () => {
       ],
     } as const;
 
-    const anthropic = mapOpenAIToAnthropic(openaiResponse, "gpt-5.2-codex");
+    const claude = mapOpenAIToClaude(openaiResponse, "gpt-5.2-codex");
 
-    expect(anthropic.content).toEqual([
+    expect(claude.content).toEqual([
       { type: "text", text: "answer" },
       { type: "thinking", thinking: "trace" },
       { type: "thinking", thinking: "summary", signature: "sig_1" },
@@ -77,9 +77,9 @@ describe("mapOpenAIToAnthropic", () => {
 });
 
 
-describe("mapAnthropicToOpenAI", () => {
+describe("mapClaudeToOpenAI", () => {
   it("converts user/assistant messages into OpenAI input items", () => {
-    const anthropicRequest = {
+    const claudeRequest = {
       model: "gpt-5.2-codex",
       messages: [
         { role: "user", content: "Hello" },
@@ -88,7 +88,7 @@ describe("mapAnthropicToOpenAI", () => {
       max_tokens: 10,
     } as const;
 
-    const openai = mapAnthropicToOpenAI(anthropicRequest, "gpt-5.2-codex");
+    const openai = mapClaudeToOpenAI(claudeRequest, "gpt-5.2-codex");
 
     expect(openai.model).toBe("gpt-5.2-codex");
     expect(openai.input).toEqual([
@@ -98,7 +98,7 @@ describe("mapAnthropicToOpenAI", () => {
   });
 
   it("drops thinking blocks from OpenAI input", () => {
-    const anthropicRequest = {
+    const claudeRequest = {
       model: "gpt-5.2-codex",
       messages: [
         {
@@ -113,7 +113,7 @@ describe("mapAnthropicToOpenAI", () => {
       max_tokens: 10,
     } as const;
 
-    const openai = mapAnthropicToOpenAI(anthropicRequest, "gpt-5.2-codex");
+    const openai = mapClaudeToOpenAI(claudeRequest, "gpt-5.2-codex");
 
     expect(openai.input).toEqual([
       {

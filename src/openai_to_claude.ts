@@ -1,4 +1,4 @@
-type AnthropicMessageContent =
+type ClaudeMessageContent =
   | { type: "text"; text: string }
   | { type: "tool_use"; id: string; name: string; input: unknown }
   | { type: "tool_result"; tool_use_id: string; content: string }
@@ -6,14 +6,14 @@ type AnthropicMessageContent =
   | { type: "redacted_thinking"; data: string; signature?: string }
   | { type: "image"; source: { type: string; media_type?: string; data?: string; url?: string } };
 
-type AnthropicMessage = {
+type ClaudeMessage = {
   role: "user" | "assistant";
-  content: string | AnthropicMessageContent[];
+  content: string | ClaudeMessageContent[];
 };
 
-type AnthropicRequest = {
+type ClaudeRequest = {
   model: string;
-  messages: AnthropicMessage[];
+  messages: ClaudeMessage[];
   max_tokens?: number;
   temperature?: number;
   top_p?: number;
@@ -70,7 +70,7 @@ type OpenAIRequest = {
   reasoning?: { effort?: string; summary?: string };
 };
 
-type AnthropicUsage = {
+type ClaudeUsage = {
   cache_creation?: {
     ephemeral_1h_input_tokens?: number;
     ephemeral_5m_input_tokens?: number;
@@ -85,15 +85,15 @@ type AnthropicUsage = {
   service_tier?: "standard" | "priority" | "batch";
 };
 
-type AnthropicResponse = {
+type ClaudeResponse = {
   id: string;
   type: "message";
   role: "assistant";
-  content: Array<AnthropicMessageContent>;
+  content: Array<ClaudeMessageContent>;
   model: string;
   stop_reason: string | null;
   stop_sequence?: string | null;
-  usage?: AnthropicUsage;
+  usage?: ClaudeUsage;
 };
 
 type OpenAIResponseItem = {
@@ -170,7 +170,7 @@ type OpenAIResponse = {
   usage?: OpenAIUsage;
 };
 
-const mapOpenAIUsageToAnthropic = (usage?: OpenAIUsage): AnthropicUsage | undefined => {
+const mapOpenAIUsageToClaude = (usage?: OpenAIUsage): ClaudeUsage | undefined => {
   if (!usage) return undefined;
   return {
     input_tokens: usage.input_tokens ?? usage.prompt_tokens,
@@ -179,14 +179,14 @@ const mapOpenAIUsageToAnthropic = (usage?: OpenAIUsage): AnthropicUsage | undefi
   };
 };
 
-const mapReasoningBlockToAnthropic = (block: {
+const mapReasoningBlockToClaude = (block: {
   type?: string;
   text?: string;
   reasoning?: string;
   summary?: string;
   signature?: string;
   data?: string;
-}): AnthropicMessageContent | null => {
+}): ClaudeMessageContent | null => {
   if (block.type === "reasoning" || block.type === "output_reasoning") {
     const thinking = block.text ?? block.reasoning ?? block.summary ?? "";
     return {
@@ -235,7 +235,7 @@ const countWebSearchRequests = (items: OpenAIResponseItem[] | undefined): number
   return ids.size > 0 ? ids.size : fallbackCount;
 };
 
-const attachToolUseUsage = (usage: AnthropicUsage | undefined, webSearchRequests: number): AnthropicUsage | undefined => {
+const attachToolUseUsage = (usage: ClaudeUsage | undefined, webSearchRequests: number): ClaudeUsage | undefined => {
   if (!usage && webSearchRequests === 0) return usage;
   return {
     ...(usage ?? {}),
@@ -333,9 +333,9 @@ const mapBudgetTokensToEffort = (budgetTokens: number): "low" | "medium" | "high
   return "low";
 };
 
-export const mapOpenAIToAnthropic = (openai: OpenAIResponse, model: string): AnthropicResponse => {
+export const mapOpenAIToClaude = (openai: OpenAIResponse, model: string): ClaudeResponse => {
   const messageItem = openai.output.find(item => item.type === "message");
-  const content: AnthropicMessageContent[] = [];
+  const content: ClaudeMessageContent[] = [];
   const modelConfig = getDownstreamConfig(model);
   const webSearchRequests = countWebSearchRequests(openai.output);
 
@@ -354,9 +354,9 @@ export const mapOpenAIToAnthropic = (openai: OpenAIResponse, model: string): Ant
         const resultPayload = block.results ?? block.content ?? block.output ?? block.text;
         content.push({ type: "tool_result", tool_use_id: callId, content: stringifyToolResult(resultPayload) });
       } else if (block.type === "reasoning" || block.type === "output_reasoning" || block.type === "redacted_reasoning") {
-        const mapped = mapReasoningBlockToAnthropic(block);
+        const mapped = mapReasoningBlockToClaude(block);
         if (mapped) {
-          logReasoning("mapOpenAIToAnthropic.message", block);
+          logReasoning("mapOpenAIToClaude.message", block);
           content.push(mapped);
         }
       }
@@ -376,9 +376,9 @@ export const mapOpenAIToAnthropic = (openai: OpenAIResponse, model: string): Ant
       const resultPayload = item.results ?? item.content ?? item.output ?? item.text;
       content.push({ type: "tool_result", tool_use_id: callId, content: stringifyToolResult(resultPayload) });
     } else if (item.type === "reasoning" || item.type === "output_reasoning" || item.type === "redacted_reasoning") {
-      const mapped = mapReasoningBlockToAnthropic(item);
+      const mapped = mapReasoningBlockToClaude(item);
       if (mapped) {
-        logReasoning("mapOpenAIToAnthropic.item", item);
+        logReasoning("mapOpenAIToClaude.item", item);
         content.push(mapped);
       }
     }
@@ -389,7 +389,7 @@ export const mapOpenAIToAnthropic = (openai: OpenAIResponse, model: string): Ant
     stopReason = "max_tokens";
   }
 
-  const baseUsage = mapOpenAIUsageToAnthropic(openai.usage);
+  const baseUsage = mapOpenAIUsageToClaude(openai.usage);
   const usage = attachToolUseUsage(baseUsage, webSearchRequests);
   if (!openai.usage) {
     console.log("[messages] Upstream response missing usage; downstream usage may be zero");
@@ -407,8 +407,8 @@ export const mapOpenAIToAnthropic = (openai: OpenAIResponse, model: string): Ant
   };
 };
 
-// Anthropic to OpenAI conversion helpers
-const textFromContent = (content: AnthropicMessage["content"]) => {
+// Claude to OpenAI conversion helpers
+const textFromContent = (content: ClaudeMessage["content"]) => {
   if (typeof content === "string") return content;
   return content
     .filter((block) => block.type === "text")
@@ -416,7 +416,7 @@ const textFromContent = (content: AnthropicMessage["content"]) => {
     .join("");
 };
 
-const extractToolCalls = (content: AnthropicMessage["content"]): OpenAIToolCall[] => {
+const extractToolCalls = (content: ClaudeMessage["content"]): OpenAIToolCall[] => {
   if (typeof content === "string") return [];
   const toolBlocks = content.filter((block) => block.type === "tool_use") as Array<{
     type: "tool_use";
@@ -431,7 +431,7 @@ const extractToolCalls = (content: AnthropicMessage["content"]): OpenAIToolCall[
   }));
 };
 
-const extractToolResults = (content: AnthropicMessage["content"]) => {
+const extractToolResults = (content: ClaudeMessage["content"]) => {
   if (typeof content === "string") return [] as Array<{ tool_call_id: string; content: string }>;
   const resultBlocks = content.filter((block) => block.type === "tool_result") as Array<{
     type: "tool_result";
@@ -441,7 +441,7 @@ const extractToolResults = (content: AnthropicMessage["content"]) => {
   return resultBlocks.map((block) => ({ tool_call_id: block.tool_use_id, content: block.content }));
 };
 
-const mapThinkingBlockToOpenAI = (_block: AnthropicMessageContent): OpenAIOutputContentBlock | null => {
+const mapThinkingBlockToOpenAI = (_block: ClaudeMessageContent): OpenAIOutputContentBlock | null => {
   return null;
 };
 
@@ -453,8 +453,8 @@ const formatToolCall = (call: OpenAIToolCall) => formatToolCalls([call]);
 const formatToolResults = (results: Array<{ tool_call_id: string; content: string }>) =>
   results.map((result) => `[tool_result id=${result.tool_call_id}]\n${result.content}`).join("\n");
 
-export const mapAnthropicToOpenAI = (
-  req: AnthropicRequest,
+export const mapClaudeToOpenAI = (
+  req: ClaudeRequest,
   upstreamModel: string,
 ): OpenAIRequest => {
   const messages: OpenAIInputItem[] = [];
@@ -495,7 +495,7 @@ export const mapAnthropicToOpenAI = (
             function: { name: block.name, arguments: JSON.stringify(block.input ?? {}) },
           }));
         } else if (block.type === "thinking" || block.type === "redacted_thinking") {
-          logReasoning("mapAnthropicToOpenAI.message.skipped", block);
+          logReasoning("mapClaudeToOpenAI.message.skipped", block);
         }
       }
 
@@ -524,7 +524,7 @@ export const mapAnthropicToOpenAI = (
   };
 
   if (Object.keys(reasoning).length > 0) {
-    logReasoning("mapAnthropicToOpenAI.request", reasoning);
+    logReasoning("mapClaudeToOpenAI.request", reasoning);
   }
 
   return {
@@ -536,14 +536,14 @@ export const mapAnthropicToOpenAI = (
     stream: req.stream,
     tools: req.tools?.filter((tool) => {
       if (!tool.name) {
-        console.log("[mapAnthropicToOpenAI] Filtering out tool without name:", JSON.stringify(tool, null, 2));
+        console.log("[mapClaudeToOpenAI] Filtering out tool without name:", JSON.stringify(tool, null, 2));
         return false;
       }
       return true;
     }).map((tool) => {
       if (tool.name === "web_search" || tool.type === "web_search") {
         const { max_results, search_context_size, user_location } = extractWebSearchToolConfig(tool);
-        logVerbose("[mapAnthropicToOpenAI] Mapping web_search tool:", {
+        logVerbose("[mapClaudeToOpenAI] Mapping web_search tool:", {
           max_results,
           search_context_size,
           user_location,
@@ -567,7 +567,7 @@ export const mapAnthropicToOpenAI = (
   };
 };
 
-export const createAnthropicStream = async (openaiStream: ReadableStream<Uint8Array>, model: string) => {
+export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array>, model: string) => {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const reader = openaiStream.getReader();
@@ -655,13 +655,13 @@ export const createAnthropicStream = async (openaiStream: ReadableStream<Uint8Ar
 
       const handleReasoningBlock = (block: { type?: string; text?: string; reasoning?: string; summary?: string; signature?: string; data?: string }) => {
         if (block.type === "redacted_reasoning" && block.data) {
-          logReasoning("createAnthropicStream.redacted", block);
+          logReasoning("createClaudeStream.redacted", block);
           sendRedactedThinkingBlock(block.data, block.signature);
           return true;
         }
         if (block.type === "reasoning" || block.type === "output_reasoning") {
           const thinkingText = getReasoningText(block);
-          logReasoning("createAnthropicStream.thinking", block);
+          logReasoning("createClaudeStream.thinking", block);
           sendThinkingBlock(thinkingText, block.signature);
           return true;
         }
@@ -720,10 +720,10 @@ export const createAnthropicStream = async (openaiStream: ReadableStream<Uint8Ar
               pendingContentBlockStop = null;
             }
             // Send message_delta with usage and stop_reason before message_stop
-            const messageDelta: { stop_reason: string | null; usage?: AnthropicUsage } = {
+            const messageDelta: { stop_reason: string | null; usage?: ClaudeUsage } = {
               stop_reason: stopReason,
             };
-            const baseDeltaUsage = mapOpenAIUsageToAnthropic(usage ?? undefined);
+            const baseDeltaUsage = mapOpenAIUsageToClaude(usage ?? undefined);
             const deltaUsage = attachToolUseUsage(baseDeltaUsage, getWebSearchRequestCount());
             if (deltaUsage) {
               messageDelta.usage = deltaUsage;
@@ -826,7 +826,7 @@ export const createAnthropicStream = async (openaiStream: ReadableStream<Uint8Ar
 
           if (!sentMessageStart && json.id) {
             messageId = json.id;
-            const baseMessageUsage = mapOpenAIUsageToAnthropic(usage ?? undefined);
+            const baseMessageUsage = mapOpenAIUsageToClaude(usage ?? undefined);
             const messageUsage = attachToolUseUsage(baseMessageUsage, getWebSearchRequestCount());
             send("message_start", {
               type: "message_start",
@@ -990,10 +990,10 @@ export const createAnthropicStream = async (openaiStream: ReadableStream<Uint8Ar
           if (pendingContentBlockStop !== null) {
             send("content_block_stop", { type: "content_block_stop", index: pendingContentBlockStop });
           }
-          const messageDelta: { stop_reason: string | null; usage?: AnthropicUsage } = {
+          const messageDelta: { stop_reason: string | null; usage?: ClaudeUsage } = {
             stop_reason: stopReason,
           };
-          const baseDeltaUsage = mapOpenAIUsageToAnthropic(usage ?? undefined);
+          const baseDeltaUsage = mapOpenAIUsageToClaude(usage ?? undefined);
           const deltaUsage = attachToolUseUsage(baseDeltaUsage, getWebSearchRequestCount());
           if (deltaUsage) {
             messageDelta.usage = deltaUsage;
@@ -1013,10 +1013,10 @@ export const createAnthropicStream = async (openaiStream: ReadableStream<Uint8Ar
         send("content_block_stop", { type: "content_block_stop", index: pendingContentBlockStop });
       }
       // Send message_delta with usage and stop_reason before closing
-      const messageDelta: { stop_reason: string | null; usage?: AnthropicUsage } = {
+      const messageDelta: { stop_reason: string | null; usage?: ClaudeUsage } = {
         stop_reason: stopReason,
       };
-      const deltaUsage = mapOpenAIUsageToAnthropic(usage ?? undefined);
+      const deltaUsage = mapOpenAIUsageToClaude(usage ?? undefined);
       if (deltaUsage) {
         messageDelta.usage = deltaUsage;
       }
@@ -1029,4 +1029,4 @@ export const createAnthropicStream = async (openaiStream: ReadableStream<Uint8Ar
   return stream;
 };
 
-export type { AnthropicMessageContent, AnthropicResponse, OpenAIResponse, OpenAIResponseItem, AnthropicMessage, AnthropicRequest, OpenAIInputItem, OpenAIToolCall, OpenAIRequest };
+export type { ClaudeMessageContent, ClaudeResponse, OpenAIResponse, OpenAIResponseItem, ClaudeMessage, ClaudeRequest, OpenAIInputItem, OpenAIToolCall, OpenAIRequest };

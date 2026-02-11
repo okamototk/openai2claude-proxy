@@ -1,10 +1,10 @@
 # openai2claude-proxy
 
-openai2claude-proxy is a minimal Anthropic-compatible proxy that forwards `/v1/messages` to an OpenAI-compatible `/responses` upstream (OpenAI or OpenRouter).
+openai2claude-proxy is a minimal Claude-compatible proxy that forwards `/v1/messages` to an OpenAI-compatible `/responses` upstream (OpenAI or OpenRouter).
 
 ## Highlights
 - **Claude Code compatible**:
-  - proxies OpenAI-style APIs to Anthropic `/v1/messages`, and **bypasses built-in tools** like `web_search` that other proxies may fail on.
+  - proxies OpenAI-style APIs to Claude `/v1/messages`, and **bypasses built-in tools** like `web_search` that other proxies may fail on.
 - **OpenAI API + OpenRouter support**:
   - access gpt-5.x-codex, Kimi K2.5, MiniMax M2.1, Grok 4.2, Qwen3 Coder Next, and similar models on OpenAI API and OpenRouter.
 - Launch in **3 sec**:
@@ -61,7 +61,7 @@ bunx github:okamototk/openai2claude-proxy --model gpt-5.2-codex
 ## Claude Code Configuration
 - Install claude-code:
 ```bash
-bun install @anthropic-ai/claude-code
+bun install @claude-ai/claude-code
 ```
 - Configure claude-code env for openai2claude-proxy:
 ```bash
