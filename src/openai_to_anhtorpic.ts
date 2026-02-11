@@ -569,8 +569,6 @@ export const createAnthropicStream = async (openaiStream: ReadableStream<Uint8Ar
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const reader = openaiStream.getReader();
-  let upstreamChunks: unknown[] = [];
-  let downstreamEvents: unknown[] = [];
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -595,7 +593,6 @@ export const createAnthropicStream = async (openaiStream: ReadableStream<Uint8Ar
       const getWebSearchRequestCount = () => (webSearchCallIds.size > 0 ? webSearchCallIds.size : webSearchFallbackCount);
 
       const send = (event: string, data: unknown) => {
-        downstreamEvents.push({ event, data });
         controller.enqueue(encoder.encode(`event: ${event}\n`));
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
       };
@@ -734,8 +731,6 @@ export const createAnthropicStream = async (openaiStream: ReadableStream<Uint8Ar
             }
             send("message_delta", { type: "message_delta", delta: messageDelta });
             send("message_stop", { type: "message_stop" });
-            console.log("[messages] Upstream response chunks:", JSON.stringify(upstreamChunks, null, 2));
-            console.log("[messages] Downstream response events:", JSON.stringify(downstreamEvents, null, 2));
             controller.close();
             return;
           }
@@ -787,7 +782,6 @@ export const createAnthropicStream = async (openaiStream: ReadableStream<Uint8Ar
             console.log("[messages] Failed to parse upstream payload:", payload, error);
             continue;
           }
-          upstreamChunks.push(json);
 
           if (maybeHandleReasoningEvent(json.type, json as { delta?: { type?: string; thinking?: string; signature?: string; data?: string } })) {
             continue;
@@ -1007,8 +1001,6 @@ export const createAnthropicStream = async (openaiStream: ReadableStream<Uint8Ar
           }
           send("message_delta", { type: "message_delta", delta: messageDelta });
           send("message_stop", { type: "message_stop" });
-          console.log("[messages] Upstream response chunks:", JSON.stringify(upstreamChunks, null, 2));
-          console.log("[messages] Downstream response events:", JSON.stringify(downstreamEvents, null, 2));
           controller.close();
           return;
         }
@@ -1028,9 +1020,6 @@ export const createAnthropicStream = async (openaiStream: ReadableStream<Uint8Ar
       }
       send("message_delta", { type: "message_delta", delta: messageDelta });
       send("message_stop", { type: "message_stop" });
-
-      console.log("[messages] Upstream response chunks:", JSON.stringify(upstreamChunks, null, 2));
-      console.log("[messages] Downstream response events:", JSON.stringify(downstreamEvents, null, 2));
       controller.close();
     },
   });

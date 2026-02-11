@@ -1,118 +1,17 @@
 #!/usr/bin/env bun
 
-import { 
-  mapOpenAIToAnthropic, 
+import {
+  mapOpenAIToAnthropic,
   mapAnthropicToOpenAI,
   createAnthropicStream,
-  GPT5_MODEL_CONFIG, 
-  type AnthropicMessage, 
-  type AnthropicRequest, 
-  type OpenAIToolCall, 
-  type OpenAIRequest,
-  type AnthropicMessageContent, 
-  type AnthropicResponse, 
-  type OpenAIResponse, 
-  type OpenAIResponseItem 
+  type AnthropicRequest,
+  type OpenAIResponse,
 } from "./openai_to_anhtorpic";
+import { buildConfig, buildUpstream, getModelMapping, getPublicConfig } from "./config";
+const CONFIG = buildConfig(process.env, process.argv);
+const upstream = buildUpstream(CONFIG);
 
-const DEFAULT_MODEL_NAME = "gpt-5.2-codex";
-
-type ModelMapping = {
-  upstream: string;
-  downstream: string;
-};
-
-const parseModelArg = (modelArg: string): ModelMapping => {
-  let upstream = "";
-  let downstream: string | null = null;
-  let escaped = false;
-
-  for (let i = 0; i < modelArg.length; i += 1) {
-    const char = modelArg[i]!;
-    if (escaped) {
-      if (downstream === null) {
-        upstream += char;
-      } else {
-        downstream += char;
-      }
-      escaped = false;
-      continue;
-    }
-
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-
-    if (char === ":" && downstream === null) {
-      downstream = "";
-      continue;
-    }
-
-    if (downstream === null) {
-      upstream += char;
-    } else {
-      downstream += char;
-    }
-  }
-
-  if (escaped) {
-    if (downstream === null) {
-      upstream += "\\";
-    } else {
-      downstream += "\\";
-    }
-  }
-
-  if (downstream === null) {
-    return { upstream, downstream: upstream };
-  }
-
-  return { upstream, downstream };
-};
-
-const resolveModelNames = (): ModelMapping[] => {
-  const args = process.argv.slice(2);
-  const modelArgs: string[] = [];
-
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    if (arg === "--model" || arg === "-m") {
-      const value = args[i + 1];
-      if (value) {
-        modelArgs.push(value);
-        i += 1;
-      }
-    } else if (arg.startsWith("--model=")) {
-      modelArgs.push(arg.split("=", 2)[1]!);
-    } else if (arg.startsWith("-m=")) {
-      modelArgs.push(arg.split("=", 2)[1]!);
-    }
-  }
-
-  if (modelArgs.length === 0) {
-    return [{ upstream: DEFAULT_MODEL_NAME, downstream: DEFAULT_MODEL_NAME }];
-  }
-
-  return modelArgs.map(parseModelArg);
-};
-
-const modelMappings = resolveModelNames();
-const defaultModelMapping = modelMappings[0]!;
-
-const CONFIG = {
-  provider: (process.env.PROVIDER || "openai").toLowerCase(),
-  openaiKey: process.env.OPENAI_API_KEY || "",
-  openrouterKey: process.env.OPENROUTER_API_KEY || "",
-  openaiBaseUrl: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
-  openrouterBaseUrl: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
-  modelMappings,
-  defaultUpstreamModel: defaultModelMapping.upstream,
-  defaultDownstreamModel: defaultModelMapping.downstream,
-  port: Number(process.env.PORT || "3000"),
-  bindAddress: process.env.BIND_ADDRESS || "127.0.0.1",
-  verboseLogging: (process.env.VERBOSE_LOGGING || "").toLowerCase() === "true",
-};
+const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || "30000");
 
 const logVerbose = (...args: unknown[]) => {
   if (CONFIG.verboseLogging) {
@@ -120,22 +19,15 @@ const logVerbose = (...args: unknown[]) => {
   }
 };
 
-const getModelMapping = (downstreamModel: string): ModelMapping | undefined => {
-  return CONFIG.modelMappings.find(m => m.downstream === downstreamModel);
-};
-
-const upstream = (() => {
-  if (CONFIG.provider === "openrouter") {
-    return {
-      baseUrl: CONFIG.openrouterBaseUrl,
-      apiKey: CONFIG.openrouterKey,
-    };
+const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit, timeoutMs: number) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return {
-    baseUrl: CONFIG.openaiBaseUrl,
-    apiKey: CONFIG.openaiKey,
-  };
-})();
+};
 
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -148,20 +40,7 @@ const handleModels = () =>
 
 const handleHealth = () => jsonResponse({ status: "ok" });
 
-const getPublicConfig = () => ({
-  provider: CONFIG.provider,
-  modelMappings: CONFIG.modelMappings,
-  defaultUpstreamModel: CONFIG.defaultUpstreamModel,
-  defaultDownstreamModel: CONFIG.defaultDownstreamModel,
-  openaiBaseUrl: CONFIG.openaiBaseUrl,
-  openrouterBaseUrl: CONFIG.openrouterBaseUrl,
-  port: CONFIG.port,
-  bindAddress: CONFIG.bindAddress,
-  hasUpstreamApiKey: Boolean(upstream.apiKey),
-  verboseLogging: CONFIG.verboseLogging,
-});
-
-const handleConfig = () => jsonResponse(getPublicConfig());
+const handleConfig = () => jsonResponse(getPublicConfig(CONFIG, upstream));
 
 const handleMessages = async (req: Request) => {
   const payload = (await req.json()) as AnthropicRequest;
@@ -173,7 +52,7 @@ const handleMessages = async (req: Request) => {
 
   const downstreamModel = payload.model || CONFIG.defaultDownstreamModel;
   const mapping =
-    getModelMapping(downstreamModel) ?? getModelMapping(CONFIG.defaultDownstreamModel);
+    getModelMapping(CONFIG, downstreamModel) ?? getModelMapping(CONFIG, CONFIG.defaultDownstreamModel);
   if (!mapping) {
     const allowedModels = CONFIG.modelMappings.map(m => m.downstream);
     return jsonResponse({ error: `Model not allowed: '${downstreamModel}'`, allowedModels }, 400);
@@ -196,13 +75,24 @@ const handleMessages = async (req: Request) => {
     return jsonResponse({ error: "Missing upstream API key" }, 401);
   }
 
-  const upstreamResp = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(openaiPayload),
-  });
+  let upstreamResp: Response;
+  try {
+    upstreamResp = await fetchWithTimeout(
+      url,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(openaiPayload),
+      },
+      UPSTREAM_TIMEOUT_MS
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return jsonResponse({ error: "Upstream request timed out", details: message }, 504);
+  }
 
-  console.log("[messages] Upstream response status:", upstreamResp.status);
+  const statusLog = upstreamResp.ok && upstreamResp.body ? logVerbose : console.log;
+  statusLog("[messages] Upstream response status:", upstreamResp.status);
 
   if (!upstreamResp.ok || !upstreamResp.body) {
     const text = await upstreamResp.text();
@@ -219,10 +109,10 @@ const handleMessages = async (req: Request) => {
   }
 
   const openaiData = (await upstreamResp.json()) as OpenAIResponse;
-  console.log("[messages] Upstream response data:", JSON.stringify(openaiData, null, 2));
+  logVerbose("[messages] Upstream response data:", JSON.stringify(openaiData, null, 2));
 
   const anthropicData = mapOpenAIToAnthropic(openaiData, mapping.downstream);
-  console.log("[messages] Downstream response data:", JSON.stringify(anthropicData, null, 2));
+  logVerbose("[messages] Downstream response data:", JSON.stringify(anthropicData, null, 2));
 
   return jsonResponse(anthropicData);
 };
@@ -241,7 +131,7 @@ const checkUpstreamModels = async () => {
   };
 
   try {
-    const resp = await fetch(url, { headers });
+    const resp = await fetchWithTimeout(url, { headers }, UPSTREAM_TIMEOUT_MS);
     if (!resp.ok) {
       const text = await resp.text();
       console.log(`[startup] Model check failed: ${resp.status} ${text}`);
@@ -259,7 +149,7 @@ const checkUpstreamModels = async () => {
     const log = missing.length > 0 ? console.error : console.log;
     log(
       "[startup] Upstream model check:",
-      JSON.stringify({ provider: CONFIG.provider, checked: results.length, missing }, null, 2)
+      JSON.stringify({ provider: CONFIG.provider, checked: results.map(result => result.upstream), missing }, null, 2)
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -295,16 +185,20 @@ const checkToolChoiceSupport = async () => {
           type: "web_search",
         },
       ],
-      tool_choice: "auto",
+      tool_choice: "required",
       max_output_tokens: 16,
     };
 
     try {
-      const resp = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload),
-      });
+      const resp = await fetchWithTimeout(
+        url,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload),
+        },
+        UPSTREAM_TIMEOUT_MS
+      );
       if (!resp.ok) {
         const text = await resp.text();
         results.push({ upstream: mapping.upstream, ok: false, status: resp.status, error: text });
@@ -321,7 +215,7 @@ const checkToolChoiceSupport = async () => {
   const log = failing.length > 0 ? console.error : console.log;
   log(
     "[startup] Tool choice check:",
-    JSON.stringify({ provider: CONFIG.provider, checked: results.length, failing }, null, 2)
+    JSON.stringify({ provider: CONFIG.provider, checked: results.map(result => result.upstream), failing }, null, 2)
   );
   if (failing.length > 0) {
     console.error("[startup] Tool choice failures:", JSON.stringify(results.filter(result => !result.ok), null, 2));
@@ -348,15 +242,9 @@ const server = Bun.serve({
     if (req.method === "GET" && url.pathname === "/v1/models") {
       return handleModels();
     }
-    if (req.method === "GET" && url.pathname === "/health") {
-      return handleHealth();
-    }
-    if (req.method === "GET" && url.pathname === "/") {
-      return handleConfig();
-    }
     return notFound();
   },
 });
 
-console.log("Proxy config:", JSON.stringify(getPublicConfig(), null, 2));
+console.log("Proxy config:", JSON.stringify(getPublicConfig(CONFIG, upstream), null, 2));
 console.log(`openai2claude-proxy listening on http://${CONFIG.bindAddress}:${server.port}`);
