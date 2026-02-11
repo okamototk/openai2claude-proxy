@@ -172,7 +172,8 @@ const handleMessages = async (req: Request) => {
   logVerbose("----------------------");
 
   const downstreamModel = payload.model || CONFIG.defaultDownstreamModel;
-  const mapping = getModelMapping(downstreamModel);
+  const mapping =
+    getModelMapping(downstreamModel) ?? getModelMapping(CONFIG.defaultDownstreamModel);
   if (!mapping) {
     const allowedModels = CONFIG.modelMappings.map(m => m.downstream);
     return jsonResponse({ error: `Model not allowed: '${downstreamModel}'`, allowedModels }, 400);
