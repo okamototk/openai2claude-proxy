@@ -2,30 +2,37 @@
 
 openai2claude-proxy is a minimal Anthropic-compatible proxy that forwards `/v1/messages` to an OpenAI-compatible `/responses` upstream (OpenAI or OpenRouter).
 
+## Highlights
+- **Claude Code compatible**:
+  - proxies OpenAI-style APIs to Anthropic `/v1/messages`, and **bypasses built-in tools** like `web_search` that other proxies may fail on.
+- **OpenAI API + OpenRouter support**:
+  - access gpt-5.x-codex, Kimi K2.5, MiniMax M2.1, Grok 4.2, Qwen3 Coder Next, and similar models on OpenAI API and OpenRouter.
+- Launch in **3 sec**:
+  - TypeScript instead of Python. Say goodbye to slow Python.
+  - Zero third-party dependencies for a tiny, fast footprint.
+  - Runs on Bun (not Node) for near-instant startup.
+
 ## Requirements
-- Bun or Node
-This guide use Bun for run proxy.
+- Bun
+This guide uses Bun to run the proxy.
 
 
 ## Install Runtime
 
 macOS:
 ```bash
-brew install node
 brew install bun
 ```
 
 Linux (Debian/Ubuntu):
 ```bash
-sudo apt-get update
-sudo apt-get install -y nodejs npm
 curl -fsSL https://bun.sh/install | bash
 ```
 
 Windows:
 Use WSL (Windows Subsystem for Linux) and follow the Linux steps above.
 
-Note: openai2calude-proxy is executed by bun to run TypeScript code. But need npx(node) to fetch code from GitHub repository.
+Note: openai2calude-proxy is executed by bun to run TypeScript code.
 
 ## Configure
 Set env vars (example for OpenAI):
@@ -48,13 +55,13 @@ Optional overrides:
 
 ## Run
 ```bash
-npx https://github.com/okamototk/openai2claude-proxy --model gpt-5.2-codex
+bunx github:okamototk/openai2claude-proxy --model gpt-5.2-codex
 ```
 
 ## Claude Code Configuration
 - Install claude-code:
 ```bash
-bun install @anthropic-ai/claude
+bun install @anthropic-ai/claude-code
 ```
 - Configure claude-code env for openai2claude-proxy:
 ```bash
