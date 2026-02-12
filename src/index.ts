@@ -396,7 +396,17 @@ const checkToolChoiceSupport = async () => {
     authorization: `Bearer ${upstream.apiKey}`,
   };
 
-  const results: Array<{ upstream: string; ok: boolean; status?: number; error?: string }> = [];
+  const results: Array<{
+    upstream: string;
+    ok: boolean;
+    status?: number;
+    statusText?: string;
+    requestId?: string | null;
+    error?: string;
+    errorCode?: string;
+    errorType?: string;
+    errorMessage?: string;
+  }> = [];
 
   for (const mapping of CONFIG.modelMappings) {
     const payload = {
@@ -413,7 +423,7 @@ const checkToolChoiceSupport = async () => {
         },
       ],
       tool_choice: "required",
-      max_output_tokens: 16,
+      max_output_tokens: 256,
     };
 
     try {
@@ -428,7 +438,55 @@ const checkToolChoiceSupport = async () => {
       );
       if (!resp.ok) {
         const text = await resp.text();
-        results.push({ upstream: mapping.upstream, ok: false, status: resp.status, error: text });
+        let errorCode: string | undefined;
+        let errorType: string | undefined;
+        let errorMessage: string | undefined;
+        try {
+          const parsed = JSON.parse(text) as { error?: { code?: string; type?: string; message?: string } };
+          errorCode = parsed?.error?.code;
+          errorType = parsed?.error?.type;
+          errorMessage = parsed?.error?.message;
+        } catch {
+          errorMessage = undefined;
+        }
+        const requestId =
+          resp.headers.get("x-request-id") ||
+          resp.headers.get("openai-request-id") ||
+          resp.headers.get("request-id");
+        console.error(
+          "[startup] Tool choice failure detail:",
+          JSON.stringify(
+            {
+              upstream: mapping.upstream,
+              status: resp.status,
+              statusText: resp.statusText,
+              requestId,
+              errorCode,
+              errorType,
+              errorMessage,
+              rawError: text,
+              payload: {
+                model: mapping.upstream,
+                tool_choice: payload.tool_choice,
+                tools: payload.tools,
+                max_output_tokens: payload.max_output_tokens,
+              },
+            },
+            null,
+            2
+          )
+        );
+        results.push({
+          upstream: mapping.upstream,
+          ok: false,
+          status: resp.status,
+          statusText: resp.statusText,
+          requestId,
+          error: text,
+          errorCode,
+          errorType,
+          errorMessage,
+        });
         continue;
       }
       results.push({ upstream: mapping.upstream, ok: true, status: resp.status });
