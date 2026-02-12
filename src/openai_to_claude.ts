@@ -1,3 +1,7 @@
+import { patchConsoleWithTimestamps } from "./logger";
+
+patchConsoleWithTimestamps();
+
 type ClaudeMessageContent =
   | { type: "text"; text: string }
   | { type: "tool_use"; id: string; name: string; input: unknown }
@@ -276,7 +280,22 @@ const safeJsonParse = (value?: string): unknown | null => {
   }
 };
 
-const parseToolArguments = (value?: string): unknown => safeJsonParse(value) ?? {};
+const sanitizeToolInput = (input: unknown): unknown => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const record = input as Record<string, unknown>;
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (key === "pages" && value === "") continue;
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      sanitized[key] = sanitizeToolInput(value);
+      continue;
+    }
+    sanitized[key] = value;
+  }
+  return sanitized;
+};
+
+const parseToolArguments = (value?: string): unknown => sanitizeToolInput(safeJsonParse(value) ?? {});
 
 const logVerbose = (...args: unknown[]) => {
   if ((process.env.VERBOSE_LOGGING || "").toLowerCase() === "true") {
@@ -1016,7 +1035,8 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
       const messageDelta: { stop_reason: string | null; usage?: ClaudeUsage } = {
         stop_reason: stopReason,
       };
-      const deltaUsage = mapOpenAIUsageToClaude(usage ?? undefined);
+      const baseDeltaUsage = mapOpenAIUsageToClaude(usage ?? undefined);
+      const deltaUsage = attachToolUseUsage(baseDeltaUsage, getWebSearchRequestCount());
       if (deltaUsage) {
         messageDelta.usage = deltaUsage;
       }

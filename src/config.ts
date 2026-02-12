@@ -7,8 +7,10 @@ export type Config = {
   provider: string;
   openaiKey: string;
   openrouterKey: string;
+  geminiKey: string;
   openaiBaseUrl: string;
   openrouterBaseUrl: string;
+  geminiBaseUrl: string;
   modelMappings: ModelMapping[];
   defaultUpstreamModel: string;
   defaultDownstreamModel: string;
@@ -17,7 +19,8 @@ export type Config = {
   verboseLogging: boolean;
 };
 
-const DEFAULT_MODEL_NAME = "gpt-5.2-codex";
+const DEFAULT_OPENAI_MODEL_NAME = "gpt-5.2-codex";
+const DEFAULT_GEMINI_MODEL_NAME = "gemini-3-flash-preview";
 
 export const parseModelArg = (modelArg: string): ModelMapping => {
   let upstream = "";
@@ -68,7 +71,7 @@ export const parseModelArg = (modelArg: string): ModelMapping => {
   return { upstream, downstream };
 };
 
-export const resolveModelNames = (argv: string[]): ModelMapping[] => {
+export const resolveModelNames = (argv: string[], defaultModelName: string): ModelMapping[] => {
   const args = argv.slice(2);
   const modelArgs: string[] = [];
 
@@ -88,21 +91,28 @@ export const resolveModelNames = (argv: string[]): ModelMapping[] => {
   }
 
   if (modelArgs.length === 0) {
-    return [{ upstream: DEFAULT_MODEL_NAME, downstream: DEFAULT_MODEL_NAME }];
+    return [{ upstream: defaultModelName, downstream: defaultModelName }];
   }
 
   return modelArgs.map(parseModelArg);
 };
 
 export const buildConfig = (env: Record<string, string | undefined>, argv: string[]): Config => {
-  const modelMappings = resolveModelNames(argv);
+  const providerRaw = (env.PROVIDER || "openai").toLowerCase();
+  const provider = (providerRaw === "openai" || providerRaw === "openrouter" || providerRaw === "gemini")
+    ? providerRaw
+    : "openai";
+  const defaultModelName = provider === "gemini" ? DEFAULT_GEMINI_MODEL_NAME : DEFAULT_OPENAI_MODEL_NAME;
+  const modelMappings = resolveModelNames(argv, defaultModelName);
   const defaultModelMapping = modelMappings[0]!;
   return {
-    provider: (env.PROVIDER || "openai").toLowerCase(),
+    provider,
     openaiKey: env.OPENAI_API_KEY || "",
     openrouterKey: env.OPENROUTER_API_KEY || "",
+    geminiKey: env.GEMINI_API_KEY || "",
     openaiBaseUrl: env.OPENAI_BASE_URL || "https://api.openai.com/v1",
     openrouterBaseUrl: env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
+    geminiBaseUrl: env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta",
     modelMappings,
     defaultUpstreamModel: defaultModelMapping.upstream,
     defaultDownstreamModel: defaultModelMapping.downstream,
@@ -123,6 +133,12 @@ export const buildUpstream = (config: Config): { baseUrl: string; apiKey: string
       apiKey: config.openrouterKey,
     };
   }
+  if (config.provider === "gemini") {
+    return {
+      baseUrl: config.geminiBaseUrl,
+      apiKey: config.geminiKey,
+    };
+  }
   return {
     baseUrl: config.openaiBaseUrl,
     apiKey: config.openaiKey,
@@ -136,6 +152,7 @@ export const getPublicConfig = (config: Config, upstream: { apiKey: string }) =>
   defaultDownstreamModel: config.defaultDownstreamModel,
   openaiBaseUrl: config.openaiBaseUrl,
   openrouterBaseUrl: config.openrouterBaseUrl,
+  geminiBaseUrl: config.geminiBaseUrl,
   port: config.port,
   bindAddress: config.bindAddress,
   hasUpstreamApiKey: Boolean(upstream.apiKey),

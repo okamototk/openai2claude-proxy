@@ -74,6 +74,37 @@ describe("mapOpenAIToClaude", () => {
       { type: "redacted_thinking", data: "REDACTED", signature: "sig_2" },
     ]);
   });
+
+  it("strips empty pages from tool arguments", () => {
+    const openaiResponse = {
+      id: "resp_tool",
+      object: "response",
+      created_at: 0,
+      model: "gpt-5.2-codex",
+      output: [
+        {
+          type: "message",
+          id: "msg_tool",
+          role: "assistant",
+          content: [
+            {
+              type: "function_call",
+              call_id: "call_read",
+              name: "Read",
+              arguments: JSON.stringify({ filePath: "/tmp/file.txt", pages: "" }),
+            },
+          ],
+          stop_reason: "tool_calls",
+        },
+      ],
+    } as const;
+
+    const claude = mapOpenAIToClaude(openaiResponse, "gpt-5.2-codex");
+
+    expect(claude.content).toEqual([
+      { type: "tool_use", id: "call_read", name: "Read", input: { filePath: "/tmp/file.txt" } },
+    ]);
+  });
 });
 
 

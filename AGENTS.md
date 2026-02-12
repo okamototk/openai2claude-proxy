@@ -47,12 +47,14 @@ bun src/index.ts --model gpt-5.3-codex:gpt-5.2-codex
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PROVIDER` | Upstream API provider (`openai` or `openrouter`) | `openai` |
+| `PROVIDER` | Upstream API provider (`openai`, `openrouter`, or `gemini`) | `openai` |
 | `OPENAI_API_KEY` | OpenAI API key | - |
 | `OPENROUTER_API_KEY` | OpenRouter API key | - |
+| `GEMINI_API_KEY` | Gemini API key | - |
 | `OPENAI_BASE_URL` | OpenAI base URL | `https://api.openai.com/v1` |
 | `OPENROUTER_BASE_URL` | OpenRouter base URL | `https://openrouter.ai/api/v1` |
-| `PORT` | Server port | `8000` |
+| `GEMINI_BASE_URL` | Gemini base URL | `https://generativelanguage.googleapis.com/v1beta` |
+| `PORT` | Server port | `3000` |
 | `VERBOSE_LOGGING` | Enable verbose request/response logging (`true`) | - |
 
 ### Endpoints

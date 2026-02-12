@@ -1,11 +1,11 @@
 # openai2claude-proxy
 
-openai2claude-proxy is a minimal Claude-compatible proxy that forwards `/v1/messages` to an OpenAI-compatible `/responses` upstream (OpenAI or OpenRouter).
+openai2claude-proxy is a minimal Claude-compatible proxy that forwards `/v1/messages` to an upstream provider (OpenAI-compatible `/responses` or Gemini `generateContent`).
 
 ## Highlights
 - **Claude Code compatible**:
   - proxies OpenAI-style APIs to Claude `/v1/messages`, and **bypasses built-in tools** like `web_search` that other proxies may fail on.
-- **OpenAI API + OpenRouter support**:
+- **OpenAI API + OpenRouter + Gemini support**:
   - access gpt-5.x-codex, Kimi K2.5, MiniMax M2.1, Grok 4.2, Qwen3 Coder Next, and similar models on OpenAI API and OpenRouter.
 - Launch in **3 sec**:
   - TypeScript instead of Python. Say goodbye to slow Python.
@@ -32,7 +32,7 @@ curl -fsSL https://bun.sh/install | bash
 Windows:
 Use WSL (Windows Subsystem for Linux) and follow the Linux steps above.
 
-Note: openai2calude-proxy is executed by bun to run TypeScript code.
+Note: openai2claude-proxy is executed by bun to run TypeScript code.
 
 ## Configure
 Set env vars (example for OpenAI):
@@ -46,9 +46,16 @@ export PROVIDER=openrouter
 export OPENROUTER_API_KEY=your_key
 ```
 
+For Gemini:
+```bash
+export PROVIDER=gemini
+export GEMINI_API_KEY=your_key
+```
+
 Optional overrides:
 - `OPENAI_BASE_URL` (default `https://api.openai.com/v1`)
 - `OPENROUTER_BASE_URL` (default `https://openrouter.ai/api/v1`)
+- `GEMINI_BASE_URL` (default `https://generativelanguage.googleapis.com/v1beta`)
 - `PORT` (default `3000`)
 - `BIND_ADDRESS` (default `127.0.0.1`)
 - `VERBOSE_LOGGING` (`true` to enable request/response logging)
