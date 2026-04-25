@@ -237,6 +237,34 @@ describe("mapClaudeToOpenAI", () => {
       { role: "user", content: "proceed" },
     ]);
   });
+
+  it("maps Claude web_search tool choice without unsupported name field", () => {
+    const claudeRequest = {
+      model: "gpt-5.3-codex",
+      messages: [{ role: "user", content: "search mythos" }],
+      tools: [{ name: "web_search", type: "web_search" }],
+      tool_choice: { type: "tool", name: "web_search" },
+      max_tokens: 64,
+    } as const;
+
+    const openai = mapClaudeToOpenAI(claudeRequest, "gpt-5.3-codex");
+
+    expect(openai.tool_choice).toEqual({ type: "web_search" });
+  });
+
+  it("maps Claude named tool choice to OpenAI function tool_choice", () => {
+    const claudeRequest = {
+      model: "gpt-5.3-codex",
+      messages: [{ role: "user", content: "do math" }],
+      tools: [{ name: "calculator", input_schema: { type: "object", properties: {} } }],
+      tool_choice: { type: "tool", name: "calculator" },
+      max_tokens: 64,
+    } as const;
+
+    const openai = mapClaudeToOpenAI(claudeRequest, "gpt-5.3-codex");
+
+    expect(openai.tool_choice).toEqual({ type: "function", name: "calculator" });
+  });
 });
 
 describe("createClaudeStream", () => {

@@ -457,6 +457,40 @@ const mapThinkingBlockToOpenAI = (_block: ClaudeMessageContent): OpenAIOutputCon
   return null;
 };
 
+const mapToolChoiceToOpenAI = (
+  toolChoice: ClaudeRequest["tool_choice"],
+  tools?: ClaudeRequest["tools"],
+): OpenAIRequest["tool_choice"] => {
+  if (!toolChoice) return undefined;
+
+  if (toolChoice === "auto" || toolChoice === "none" || toolChoice === "required") {
+    return toolChoice;
+  }
+
+  if (typeof toolChoice !== "object") return toolChoice;
+
+  const choice = toolChoice as { type?: string; name?: string };
+
+  if (choice.type === "auto" || choice.type === "none") return choice.type;
+  if (choice.type === "any" || choice.type === "required") return "required";
+
+  const explicitName = choice.name;
+  if (!explicitName) return undefined;
+
+  const matchesWebSearch = explicitName === "web_search"
+    || tools?.some((tool) => tool.name === explicitName && tool.type === "web_search");
+
+  if (choice.type === "tool" && matchesWebSearch) {
+    return { type: "web_search" };
+  }
+
+  if (choice.type === "tool" || choice.type === "function" || !choice.type) {
+    return { type: "function", name: explicitName };
+  }
+
+  return undefined;
+};
+
 export const mapClaudeToOpenAI = (
   req: ClaudeRequest,
   upstreamModel: string,
@@ -589,7 +623,7 @@ export const mapClaudeToOpenAI = (
         parameters: tool.input_schema,
       };
     }),
-    tool_choice: req.tool_choice,
+    tool_choice: mapToolChoiceToOpenAI(req.tool_choice, req.tools),
     ...(Object.keys(reasoning).length > 0 ? { reasoning } : {}),
   };
 };
