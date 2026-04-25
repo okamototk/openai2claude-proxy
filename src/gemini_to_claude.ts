@@ -1,5 +1,6 @@
 import type { ClaudeMessage, ClaudeMessageContent, ClaudeRequest, ClaudeResponse, ClaudeUsage } from "./openai_to_claude";
 import { patchConsoleWithTimestamps } from "./logger";
+import { logVerbose, safeJsonParse, stringifyToolResult, textFromClaudeContent } from "./common";
 
 patchConsoleWithTimestamps();
 
@@ -51,21 +52,6 @@ type GeminiResponse = {
   };
 };
 
-const logVerbose = (...args: unknown[]) => {
-  if ((process.env.VERBOSE_LOGGING || "").toLowerCase() === "true") {
-    console.log(...args);
-  }
-};
-
-const safeJsonParse = (value?: string): unknown | null => {
-  if (!value) return null;
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return null;
-  }
-};
-
 const stripGeminiUnsupportedSchemaKeys = (schema: unknown): unknown => {
   if (!schema || typeof schema !== "object") return schema;
   if (Array.isArray(schema)) return schema.map(stripGeminiUnsupportedSchemaKeys);
@@ -86,11 +72,6 @@ const stripGeminiUnsupportedSchemaKeys = (schema: unknown): unknown => {
   return cleaned;
 };
 
-const stringifyToolResult = (value: unknown): string => {
-  if (value === undefined || value === null) return "";
-  return typeof value === "string" ? value : JSON.stringify(value);
-};
-
 const mapGeminiFinishReason = (reason?: string): string | null => {
   if (!reason) return null;
   const normalized = reason.toLowerCase();
@@ -107,13 +88,7 @@ const mapGeminiUsageToClaude = (usage?: GeminiResponse["usageMetadata"]): Claude
   };
 };
 
-const textFromContent = (content: ClaudeMessage["content"]) => {
-  if (typeof content === "string") return content;
-  return content
-    .filter((block) => block.type === "text")
-    .map((block) => (block as { type: "text"; text: string }).text)
-    .join("");
-};
+const textFromContent = (content: ClaudeMessage["content"]) => textFromClaudeContent(content);
 
 const mapToolChoiceToGemini = (toolChoice: ClaudeRequest["tool_choice"]) => {
   if (!toolChoice) return undefined;

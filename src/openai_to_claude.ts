@@ -1,4 +1,5 @@
 import { patchConsoleWithTimestamps } from "./logger";
+import { logVerbose, safeJsonParse, stringifyToolResult, textFromClaudeContent } from "./common";
 
 patchConsoleWithTimestamps();
 
@@ -49,14 +50,16 @@ type OpenAIOutputContentBlock =
   | { type: "function_call"; call_id?: string; name?: string; arguments?: string }
   | { type: "web_search_call"; call_id?: string; id?: string; arguments?: string; query?: string; max_results?: number; search_context_size?: string; user_location?: unknown }
   | { type: "web_search_result"; call_id?: string; id?: string; content?: unknown; results?: unknown; output?: unknown; text?: string }
-  | { type: "reasoning"; text?: string; reasoning?: string; summary?: string; signature?: string }
-  | { type: "output_reasoning"; text?: string; reasoning?: string; summary?: string; signature?: string }
+  | { type: "reasoning"; text?: string; reasoning?: string; summary?: unknown; signature?: string }
+  | { type: "output_reasoning"; text?: string; reasoning?: string; summary?: unknown; signature?: string }
   | { type: "redacted_reasoning"; data: string; signature?: string };
 
 type OpenAIInputItem =
   | { role: "system"; content: string }
   | { role: "user"; content: string | OpenAIInputContentBlock[] }
-  | { role: "assistant"; content: string };
+  | { role: "assistant"; content: string }
+  | { type: "function_call"; call_id: string; name: string; arguments: string }
+  | { type: "function_call_output"; call_id: string; output: string };
 
 type OpenAIRequest = {
   model: string;
@@ -183,16 +186,32 @@ const mapOpenAIUsageToClaude = (usage?: OpenAIUsage): ClaudeUsage | undefined =>
   };
 };
 
+const normalizeReasoningText = (value: unknown): string => {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value
+      .map(normalizeReasoningText)
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return normalizeReasoningText(record.text ?? record.summary ?? record.reasoning ?? "");
+  }
+  return "";
+};
+
 const mapReasoningBlockToClaude = (block: {
   type?: string;
   text?: string;
   reasoning?: string;
-  summary?: string;
+  summary?: unknown;
   signature?: string;
   data?: string;
 }): ClaudeMessageContent | null => {
   if (block.type === "reasoning" || block.type === "output_reasoning") {
-    const thinking = block.text ?? block.reasoning ?? block.summary ?? "";
+    const thinking = normalizeReasoningText(block.text ?? block.reasoning ?? block.summary ?? "");
+    if (!thinking && !block.signature) return null;
     return {
       type: "thinking",
       thinking,
@@ -213,8 +232,8 @@ const logReasoning = (label: string, payload: unknown) => {
   logVerbose(`[reasoning] ${label}`, payload);
 };
 
-const getReasoningText = (block: { text?: string; reasoning?: string; summary?: string }) =>
-  block.text ?? block.reasoning ?? block.summary ?? "";
+const getReasoningText = (block: { text?: string; reasoning?: string; summary?: unknown }) =>
+  normalizeReasoningText(block.text ?? block.reasoning ?? block.summary ?? "");
 
 const countWebSearchRequests = (items: OpenAIResponseItem[] | undefined): number => {
   if (!items) return 0;
@@ -271,15 +290,6 @@ export const mapFinishReason = (reason: string | null): string | null => {
   return reason;
 };
 
-const safeJsonParse = (value?: string): unknown | null => {
-  if (!value) return null;
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return null;
-  }
-};
-
 const sanitizeToolInput = (input: unknown): unknown => {
   if (!input || typeof input !== "object" || Array.isArray(input)) return input;
   const record = input as Record<string, unknown>;
@@ -296,17 +306,6 @@ const sanitizeToolInput = (input: unknown): unknown => {
 };
 
 const parseToolArguments = (value?: string): unknown => sanitizeToolInput(safeJsonParse(value) ?? {});
-
-const logVerbose = (...args: unknown[]) => {
-  if ((process.env.VERBOSE_LOGGING || "").toLowerCase() === "true") {
-    console.log(...args);
-  }
-};
-
-const stringifyToolResult = (value: unknown): string => {
-  if (value === undefined || value === null) return "";
-  return typeof value === "string" ? value : JSON.stringify(value);
-};
 
 const buildWebSearchInput = (block: {
   arguments?: string;
@@ -427,13 +426,7 @@ export const mapOpenAIToClaude = (openai: OpenAIResponse, model: string): Claude
 };
 
 // Claude to OpenAI conversion helpers
-const textFromContent = (content: ClaudeMessage["content"]) => {
-  if (typeof content === "string") return content;
-  return content
-    .filter((block) => block.type === "text")
-    .map((block) => (block as { type: "text"; text: string }).text)
-    .join("");
-};
+const textFromContent = (content: ClaudeMessage["content"]) => textFromClaudeContent(content);
 
 const extractToolCalls = (content: ClaudeMessage["content"]): OpenAIToolCall[] => {
   if (typeof content === "string") return [];
@@ -464,14 +457,6 @@ const mapThinkingBlockToOpenAI = (_block: ClaudeMessageContent): OpenAIOutputCon
   return null;
 };
 
-const formatToolCalls = (calls: OpenAIToolCall[]) =>
-  calls.map((call) => `[tool_call id=${call.id} name=${call.function.name} args=${call.function.arguments}]`).join("\n");
-
-const formatToolCall = (call: OpenAIToolCall) => formatToolCalls([call]);
-
-const formatToolResults = (results: Array<{ tool_call_id: string; content: string }>) =>
-  results.map((result) => `[tool_result id=${result.tool_call_id}]\n${result.content}`).join("\n");
-
 export const mapClaudeToOpenAI = (
   req: ClaudeRequest,
   upstreamModel: string,
@@ -487,14 +472,31 @@ export const mapClaudeToOpenAI = (
 
   for (const msg of req.messages) {
     if (msg.role === "user") {
-      const text = textFromContent(msg.content);
-      const toolResults = extractToolResults(msg.content);
-      const toolText = toolResults.length > 0 ? formatToolResults(toolResults) : "";
-      const combined = [text, toolText].filter(Boolean).join("\n");
-
-      if (combined) {
-        messages.push({ role: "user", content: combined });
+      if (typeof msg.content === "string") {
+        if (msg.content) messages.push({ role: "user", content: msg.content });
+        continue;
       }
+
+      let textBuffer: string[] = [];
+      const flushUserText = () => {
+        const text = textBuffer.join("\n");
+        if (text) messages.push({ role: "user", content: text });
+        textBuffer = [];
+      };
+
+      for (const block of msg.content) {
+        if (block.type === "text") {
+          if (block.text) textBuffer.push(block.text);
+        } else if (block.type === "tool_result") {
+          flushUserText();
+          messages.push({
+            type: "function_call_output",
+            call_id: block.tool_use_id,
+            output: block.content ?? "",
+          });
+        }
+      }
+      flushUserText();
     } else if (msg.role === "assistant") {
       if (typeof msg.content === "string") {
         if (msg.content) {
@@ -503,25 +505,31 @@ export const mapClaudeToOpenAI = (
         continue;
       }
 
-      const textBlocks: string[] = [];
+      let textBlocks: string[] = [];
+      const flushAssistantText = () => {
+        const assistantText = textBlocks.join("\n");
+        if (assistantText) {
+          messages.push({ role: "assistant", content: assistantText });
+        }
+        textBlocks = [];
+      };
+
       for (const block of msg.content) {
         if (block.type === "text") {
-          textBlocks.push(block.text);
+          if (block.text) textBlocks.push(block.text);
         } else if (block.type === "tool_use") {
-          textBlocks.push(formatToolCall({
-            id: block.id,
-            type: "function",
-            function: { name: block.name, arguments: JSON.stringify(block.input ?? {}) },
-          }));
+          flushAssistantText();
+          messages.push({
+            type: "function_call",
+            call_id: block.id,
+            name: block.name,
+            arguments: JSON.stringify(block.input ?? {}),
+          });
         } else if (block.type === "thinking" || block.type === "redacted_thinking") {
           logReasoning("mapClaudeToOpenAI.message.skipped", block);
         }
       }
-
-      const assistantText = textBlocks.join("\n");
-      if (assistantText) {
-        messages.push({ role: "assistant", content: assistantText });
-      }
+      flushAssistantText();
     }
   }
 
@@ -599,6 +607,12 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
       let usage: OpenAIUsage | null = null;
       let stopReason: string | null = null;
       let pendingContentBlockStop: number | null = null;
+      let activeTextBlockKey: string | null = null;
+      let sawOutputTextDelta = false;
+      const streamedFunctionCallItemIds = new Set<string>();
+      const streamedFunctionCallCallIds = new Set<string>();
+      const functionCallBlockIndexByItemId = new Map<string, number>();
+      const functionCallHasArgumentDeltaByItemId = new Map<string, boolean>();
       const webSearchCallIds = new Set<string>();
       let webSearchFallbackCount = 0;
 
@@ -616,6 +630,106 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
       const send = (event: string, data: unknown) => {
         controller.enqueue(encoder.encode(`event: ${event}\n`));
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+      };
+
+      const ensureMessageStart = (candidateId?: string) => {
+        if (sentMessageStart) return;
+        if (candidateId) {
+          messageId = candidateId;
+        }
+        if (!messageId) {
+          messageId = `msg_${Date.now()}`;
+        }
+        const baseMessageUsage = mapOpenAIUsageToClaude(usage ?? undefined);
+        const messageUsage = attachToolUseUsage(baseMessageUsage, getWebSearchRequestCount());
+        send("message_start", {
+          type: "message_start",
+          message: {
+            id: messageId,
+            type: "message",
+            role: "assistant",
+            model,
+            content: [],
+            stop_reason: null,
+            stop_sequence: null,
+            ...(messageUsage ? { usage: messageUsage } : {}),
+          },
+        });
+        sentMessageStart = true;
+      };
+
+      const ensureTextContentBlock = (blockKey: string) => {
+        ensureMessageStart();
+        if (activeTextBlockKey === blockKey && pendingContentBlockStop !== null) {
+          return pendingContentBlockStop;
+        }
+        if (pendingContentBlockStop !== null) {
+          send("content_block_stop", { type: "content_block_stop", index: pendingContentBlockStop });
+          pendingContentBlockStop = null;
+        }
+        send("content_block_start", {
+          type: "content_block_start",
+          index: contentBlockIndex,
+          content_block: { type: "text", text: "" },
+        });
+        pendingContentBlockStop = contentBlockIndex;
+        activeTextBlockKey = blockKey;
+        contentBlockIndex++;
+        return pendingContentBlockStop;
+      };
+
+      const startFunctionCallContentBlock = (item: { id?: string; call_id?: string; name?: string }) => {
+        const callId = item.call_id;
+        const name = item.name;
+        if (!callId || !name) {
+          return null;
+        }
+        ensureMessageStart();
+        if (pendingContentBlockStop !== null) {
+          send("content_block_stop", { type: "content_block_stop", index: pendingContentBlockStop });
+          pendingContentBlockStop = null;
+          activeTextBlockKey = null;
+        }
+        const blockIndex = contentBlockIndex;
+        send("content_block_start", {
+          type: "content_block_start",
+          index: blockIndex,
+          content_block: { type: "tool_use", id: callId, name, input: {} },
+        });
+        pendingContentBlockStop = blockIndex;
+        contentBlockIndex++;
+        if (item.id) {
+          functionCallBlockIndexByItemId.set(item.id, blockIndex);
+          functionCallHasArgumentDeltaByItemId.set(item.id, false);
+          streamedFunctionCallItemIds.add(item.id);
+        }
+        streamedFunctionCallCallIds.add(callId);
+        return blockIndex;
+      };
+
+      const sendFunctionCallArgumentsDelta = (itemId: string | undefined, partialJson: string | undefined) => {
+        if (!itemId || !partialJson) return;
+        const blockIndex = functionCallBlockIndexByItemId.get(itemId);
+        if (blockIndex === undefined) return;
+        send("content_block_delta", {
+          type: "content_block_delta",
+          index: blockIndex,
+          delta: { type: "input_json_delta", partial_json: partialJson },
+        });
+        functionCallHasArgumentDeltaByItemId.set(itemId, true);
+      };
+
+      const stopFunctionCallContentBlock = (itemId: string | undefined) => {
+        if (!itemId) return;
+        const blockIndex = functionCallBlockIndexByItemId.get(itemId);
+        if (blockIndex === undefined) return;
+        if (pendingContentBlockStop === blockIndex) {
+          send("content_block_stop", { type: "content_block_stop", index: blockIndex });
+          pendingContentBlockStop = null;
+          activeTextBlockKey = null;
+        }
+        functionCallBlockIndexByItemId.delete(itemId);
+        functionCallHasArgumentDeltaByItemId.delete(itemId);
       };
 
       const sendThinkingBlock = (thinkingText: string, signature?: string) => {
@@ -680,6 +794,7 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
         }
         if (block.type === "reasoning" || block.type === "output_reasoning") {
           const thinkingText = getReasoningText(block);
+          if (!thinkingText && !block.signature) return false;
           logReasoning("createClaudeStream.thinking", block);
           sendThinkingBlock(thinkingText, block.signature);
           return true;
@@ -733,10 +848,12 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
           if (!trimmed.startsWith("data:")) continue;
           const payload = trimmed.replace(/^data:\s*/, "");
           if (payload === "[DONE]") {
+            ensureMessageStart();
             // Send pending content_block_stop if any
             if (pendingContentBlockStop !== null) {
               send("content_block_stop", { type: "content_block_stop", index: pendingContentBlockStop });
               pendingContentBlockStop = null;
+              activeTextBlockKey = null;
             }
             // Send message_delta with usage and stop_reason before message_stop
             const messageDelta: { stop_reason: string | null; usage?: ClaudeUsage } = {
@@ -760,6 +877,64 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
             type?: string;
             stop_reason?: string | null;
             usage?: OpenAIUsage;
+            response?: {
+              id?: string;
+              stop_reason?: string | null;
+              usage?: OpenAIUsage;
+              output?: Array<{
+                type?: string;
+                id?: string;
+                call_id?: string;
+                name?: string;
+                arguments?: string;
+                stop_reason?: string | null;
+                query?: string;
+                max_results?: number;
+                search_context_size?: string;
+                user_location?: unknown;
+                results?: unknown;
+                output?: unknown;
+                text?: string;
+                reasoning?: string;
+                summary?: string;
+                signature?: string;
+                data?: string;
+                content?: Array<{
+                  type?: string;
+                  text?: string;
+                  reasoning?: string;
+                  summary?: string;
+                  signature?: string;
+                  data?: string;
+                  call_id?: string;
+                  name?: string;
+                  arguments?: string;
+                  query?: string;
+                  max_results?: number;
+                  search_context_size?: string;
+                  user_location?: unknown;
+                  results?: unknown;
+                  output?: unknown;
+                }>;
+              }>;
+            };
+            item?: {
+              id?: string;
+              type?: string;
+              call_id?: string;
+              name?: string;
+              arguments?: string;
+              query?: string;
+              max_results?: number;
+              search_context_size?: string;
+              user_location?: unknown;
+            };
+            delta?: { type?: string; thinking?: string; signature?: string; data?: string } | string;
+            text?: string;
+            arguments?: string;
+            output_index?: number;
+            content_index?: number;
+            item_id?: string;
             output?: Array<{
               type?: string;
               id?: string;
@@ -808,6 +983,83 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
             continue;
           }
 
+          if (json.type === "response.output_text.delta") {
+            const textDelta = typeof json.delta === "string" ? json.delta : "";
+            if (!textDelta) {
+              continue;
+            }
+            sawOutputTextDelta = true;
+            ensureMessageStart(json.id || json.response?.id);
+            const blockKey = `${json.item_id ?? json.output_index ?? "0"}:${json.content_index ?? 0}`;
+            const blockIndex = ensureTextContentBlock(blockKey);
+            send("content_block_delta", {
+              type: "content_block_delta",
+              index: blockIndex,
+              delta: { type: "text_delta", text: textDelta },
+            });
+            continue;
+          }
+
+          if (json.type === "response.output_text.done") {
+            ensureMessageStart(json.id || json.response?.id);
+            const blockKey = `${json.item_id ?? json.output_index ?? "0"}:${json.content_index ?? 0}`;
+            const doneText = json.text ?? "";
+            if (doneText && (activeTextBlockKey !== blockKey || pendingContentBlockStop === null)) {
+              const blockIndex = ensureTextContentBlock(blockKey);
+              send("content_block_delta", {
+                type: "content_block_delta",
+                index: blockIndex,
+                delta: { type: "text_delta", text: doneText },
+              });
+            }
+            if (activeTextBlockKey === blockKey && pendingContentBlockStop !== null) {
+              send("content_block_stop", { type: "content_block_stop", index: pendingContentBlockStop });
+              pendingContentBlockStop = null;
+              activeTextBlockKey = null;
+            }
+            continue;
+          }
+
+          if (json.type === "response.output_item.added") {
+            const item = json.item;
+            if (item?.type === "function_call") {
+              startFunctionCallContentBlock(item);
+            }
+            continue;
+          }
+
+          if (json.type === "response.function_call_arguments.delta") {
+            if (typeof json.delta === "string") {
+              sendFunctionCallArgumentsDelta(json.item_id, json.delta);
+            }
+            continue;
+          }
+
+          if (json.type === "response.function_call_arguments.done") {
+            const argumentsText = json.arguments;
+            if (json.item_id && argumentsText) {
+              const alreadySent = functionCallHasArgumentDeltaByItemId.get(json.item_id) === true;
+              if (!alreadySent) {
+                sendFunctionCallArgumentsDelta(json.item_id, argumentsText);
+              }
+            }
+            continue;
+          }
+
+          if (json.type === "response.output_item.done") {
+            const item = json.item;
+            if (item?.type === "function_call" && item.id) {
+              if (item.arguments) {
+                const alreadySent = functionCallHasArgumentDeltaByItemId.get(item.id) === true;
+                if (!alreadySent) {
+                  sendFunctionCallArgumentsDelta(item.id, item.arguments);
+                }
+              }
+              stopFunctionCallContentBlock(item.id);
+            }
+            continue;
+          }
+
           // Extract stop_reason and usage from upstream events
           if (json.stop_reason !== undefined) {
             stopReason = mapFinishReason(json.stop_reason);
@@ -815,9 +1067,16 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
           if (json.usage) {
             usage = json.usage;
           }
+          if (json.response?.stop_reason !== undefined) {
+            stopReason = mapFinishReason(json.response.stop_reason);
+          }
+          if (json.response?.usage) {
+            usage = json.response.usage;
+          }
           // Extract from output items as well
-          if (json.output) {
-            for (const item of json.output) {
+          const outputItems = json.output ?? json.response?.output;
+          if (outputItems) {
+            for (const item of outputItems) {
               if (item.stop_reason !== undefined) {
                 stopReason = mapFinishReason(item.stop_reason);
               }
@@ -834,40 +1093,22 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
             }
           }
 
-          if (json.type === "response.output_text.done") {
-            // Send pending content_block_stop before moving to next block
-            if (pendingContentBlockStop !== null) {
-              send("content_block_stop", { type: "content_block_stop", index: pendingContentBlockStop });
-              pendingContentBlockStop = null;
+          if (!sentMessageStart) {
+            const candidateId = json.id || json.response?.id;
+            if (candidateId) {
+              ensureMessageStart(candidateId);
             }
-            continue;
           }
 
-          if (!sentMessageStart && json.id) {
-            messageId = json.id;
-            const baseMessageUsage = mapOpenAIUsageToClaude(usage ?? undefined);
-            const messageUsage = attachToolUseUsage(baseMessageUsage, getWebSearchRequestCount());
-            send("message_start", {
-              type: "message_start",
-              message: {
-                id: messageId,
-                type: "message",
-                role: "assistant",
-                model,
-                content: [],
-                stop_reason: null,
-                stop_sequence: null,
-                ...(messageUsage ? { usage: messageUsage } : {}),
-              },
-            });
-            sentMessageStart = true;
-          }
-
-  if (json.output) {
-    for (const item of json.output) {
+  if (outputItems) {
+    ensureMessageStart(json.id || json.response?.id);
+    for (const item of outputItems) {
       if (item.type === "message" && item.content) {
         for (const contentBlock of item.content) {
           if ((contentBlock.type === "text" || contentBlock.type === "output_text") && contentBlock.text) {
+            if (sawOutputTextDelta && json.type?.startsWith("response.")) {
+              continue;
+            }
             // Send pending content_block_stop from previous block
             if (pendingContentBlockStop !== null) {
               send("content_block_stop", { type: "content_block_stop", index: pendingContentBlockStop });
@@ -933,6 +1174,12 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
           }
         }
       } else if (item.type === "function_call" && item.call_id && item.name) {
+        if (item.id && streamedFunctionCallItemIds.has(item.id)) {
+          continue;
+        }
+        if (streamedFunctionCallCallIds.has(item.call_id)) {
+          continue;
+        }
         // Handle function calls in streaming
         if (pendingContentBlockStop !== null) {
           send("content_block_stop", { type: "content_block_stop", index: pendingContentBlockStop });
@@ -1006,8 +1253,11 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
       if (finalLine.startsWith("data:")) {
         const payload = finalLine.replace(/^data:\s*/, "");
         if (payload === "[DONE]") {
+          ensureMessageStart();
           if (pendingContentBlockStop !== null) {
             send("content_block_stop", { type: "content_block_stop", index: pendingContentBlockStop });
+            pendingContentBlockStop = null;
+            activeTextBlockKey = null;
           }
           const messageDelta: { stop_reason: string | null; usage?: ClaudeUsage } = {
             stop_reason: stopReason,
@@ -1028,8 +1278,11 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
       }
 
       // Send pending content_block_stop if stream ends without [DONE]
+      ensureMessageStart();
       if (pendingContentBlockStop !== null) {
         send("content_block_stop", { type: "content_block_stop", index: pendingContentBlockStop });
+        pendingContentBlockStop = null;
+        activeTextBlockKey = null;
       }
       // Send message_delta with usage and stop_reason before closing
       const messageDelta: { stop_reason: string | null; usage?: ClaudeUsage } = {

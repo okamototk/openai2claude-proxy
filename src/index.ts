@@ -20,10 +20,13 @@ patchConsoleWithTimestamps();
 const CONFIG = buildConfig(process.env, process.argv);
 const upstream = buildUpstream(CONFIG);
 
-const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || "30000");
+const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || "300000");
 const UPSTREAM_STREAM_TIMEOUT_MS = Number(
-  process.env.UPSTREAM_STREAM_TIMEOUT_MS || process.env.UPSTREAM_TIMEOUT_MS || "120000"
+  process.env.UPSTREAM_STREAM_TIMEOUT_MS || process.env.UPSTREAM_TIMEOUT_MS || "900000"
 );
+const UPSTREAM_STREAM_TIMEOUT_UNLIMITED =
+  process.env.UPSTREAM_STREAM_TIMEOUT_UNLIMITED === "1" ||
+  process.env.UPSTREAM_STREAM_TIMEOUT_UNLIMITED === "true";
 
 const logVerbose = (...args: unknown[]) => {
   if (CONFIG.verboseLogging) {
@@ -98,7 +101,10 @@ const logUpstreamResponse = (details: { provider: string; status: number; stream
   );
 };
 
-const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit, timeoutMs: number) => {
+const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit, timeoutMs: number | null) => {
+  if (timeoutMs === null) {
+    return fetch(input, init);
+  }
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -182,6 +188,12 @@ const handleMessages = async (req: Request) => {
     return jsonResponse({ error: `Model not allowed: '${downstreamModel}'`, allowedModels }, 400);
   }
 
+  const upstreamTimeoutMs = payload.stream && UPSTREAM_STREAM_TIMEOUT_UNLIMITED
+    ? null
+    : payload.stream
+      ? UPSTREAM_STREAM_TIMEOUT_MS
+      : UPSTREAM_TIMEOUT_MS;
+
   if (hasImageBlocks(payload.messages)) {
     console.log("[messages] Image content not supported by this proxy");
     return jsonResponse({ error: "Image content is not supported by this proxy." }, 400);
@@ -222,7 +234,7 @@ const handleMessages = async (req: Request) => {
             headers,
             body: JSON.stringify(geminiPayload),
           },
-          payload.stream ? UPSTREAM_STREAM_TIMEOUT_MS : UPSTREAM_TIMEOUT_MS
+          upstreamTimeoutMs
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -299,7 +311,7 @@ const handleMessages = async (req: Request) => {
         headers,
         body: JSON.stringify(openaiPayload),
       },
-      payload.stream ? UPSTREAM_STREAM_TIMEOUT_MS : UPSTREAM_TIMEOUT_MS
+      upstreamTimeoutMs
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
