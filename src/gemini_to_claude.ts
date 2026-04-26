@@ -1,8 +1,10 @@
 import type { ClaudeMessage, ClaudeMessageContent, ClaudeRequest, ClaudeResponse, ClaudeUsage } from "./openai_to_claude";
 import { patchConsoleWithTimestamps } from "./logger";
-import { logVerbose, safeJsonParse, stringifyToolResult, textFromClaudeContent } from "./common";
+import { dumpStreamMessage, logVerbose, safeJsonParse, stringifyToolResult, textFromClaudeContent } from "./common";
 
 patchConsoleWithTimestamps();
+
+const DEFAULT_MAX_TOKENS = 128000;
 
 type GeminiPart =
   | { text: string }
@@ -171,7 +173,7 @@ export const mapClaudeToGemini = (req: ClaudeRequest): GeminiRequest => {
   const generationConfig: GeminiRequest["generationConfig"] = {
     ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
     ...(req.top_p !== undefined ? { topP: req.top_p } : {}),
-    ...(req.max_tokens !== undefined ? { maxOutputTokens: Math.max(16, req.max_tokens) } : {}),
+    maxOutputTokens: Math.max(16, req.max_tokens ?? DEFAULT_MAX_TOKENS),
     ...(req.stop_sequences ? { stopSequences: req.stop_sequences } : {}),
   };
 
@@ -256,6 +258,7 @@ export const createClaudeStreamFromGemini = async (geminiStream: ReadableStream<
       const toolCallIdsByName = new Map<string, string[]>();
 
       const send = (event: string, data: unknown) => {
+        dumpStreamMessage(`downstream ${event}`, data);
         controller.enqueue(encoder.encode(`event: ${event}\n`));
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
       };
@@ -367,6 +370,7 @@ export const createClaudeStreamFromGemini = async (geminiStream: ReadableStream<
           const trimmed = line.trim();
           if (!trimmed) continue;
           const payload = trimmed.startsWith("data:") ? trimmed.replace(/^data:\s*/, "") : trimmed;
+          dumpStreamMessage("upstream gemini", payload);
           if (payload === "[DONE]") {
             closePendingBlock();
             const messageDelta: { stop_reason: string | null; usage?: ClaudeUsage } = {

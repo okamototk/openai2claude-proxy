@@ -9,6 +9,23 @@ export const logVerbose = (...args: unknown[]) => {
   }
 };
 
+const normalizeStreamDumpValue = (value: unknown): string => {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+export const dumpStreamMessage = (label: string, payload: unknown) => {
+  if (!isVerboseLoggingEnabled()) return;
+  const text = normalizeStreamDumpValue(payload).replace(/\r?\n/g, "\\n");
+  const maxChars = 2000;
+  const output = text.length > maxChars ? `${text.slice(0, maxChars)}...<truncated>` : text;
+  console.log(`[stream] ${label}:`, output);
+};
+
 export const safeJsonParse = (value?: string): unknown | null => {
   if (!value) return null;
   try {

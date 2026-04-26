@@ -157,6 +157,89 @@ describe("mapOpenAIToClaude", () => {
       { type: "tool_use", id: "call_read", name: "Read", input: { filePath: "/tmp/file.txt" } },
     ]);
   });
+
+  it("uses tool_use stop reason when response contains tool calls but no stop_reason", () => {
+    const openaiResponse = {
+      id: "resp_tool_stop",
+      object: "response",
+      created_at: 0,
+      model: "gpt-5.3-codex",
+      output: [
+        {
+          type: "message",
+          id: "msg_tool_stop",
+          role: "assistant",
+          content: [
+            {
+              type: "function_call",
+              call_id: "call_123",
+              name: "WebSearch",
+              arguments: "{\"query\":\"Mythos\"}",
+            },
+          ],
+          stop_reason: null,
+        },
+      ],
+    } as const;
+
+    const claude = mapOpenAIToClaude(openaiResponse, "gpt-5.3-codex");
+
+    expect(claude.stop_reason).toBe("tool_use");
+  });
+
+  it("does not expose web_search_call as tool_use content", () => {
+    const openaiResponse = {
+      id: "resp_web_search",
+      object: "response",
+      created_at: 0,
+      model: "gpt-5.3-codex",
+      output: [
+        {
+          type: "web_search_call",
+          id: "ws_1",
+          query: "Mythos",
+        },
+        {
+          type: "message",
+          id: "msg_web_search",
+          role: "assistant",
+          content: [
+            { type: "output_text", text: "I found results." },
+          ],
+          stop_reason: "stop",
+        },
+      ],
+      usage: { input_tokens: 10, output_tokens: 12 },
+    } as const;
+
+    const claude = mapOpenAIToClaude(openaiResponse, "gpt-5.3-codex");
+
+    expect(claude.content).toEqual([{ type: "text", text: "I found results." }]);
+    expect(claude.stop_reason).toBe("end_turn");
+    expect(claude.usage?.server_tool_use?.web_search_requests).toBe(1);
+  });
+
+  it("defaults to end_turn when text output has null stop_reason", () => {
+    const openaiResponse = {
+      id: "resp_end_turn_default",
+      object: "response",
+      created_at: 0,
+      model: "gpt-5.3-codex",
+      output: [
+        {
+          type: "message",
+          id: "msg_end_turn_default",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Done." }],
+          stop_reason: null,
+        },
+      ],
+    } as const;
+
+    const claude = mapOpenAIToClaude(openaiResponse, "gpt-5.3-codex");
+
+    expect(claude.stop_reason).toBe("end_turn");
+  });
 });
 
 
@@ -235,6 +318,28 @@ describe("mapClaudeToOpenAI", () => {
       { type: "function_call", call_id: "call_1", name: "TaskCreate", arguments: "{\"subject\":\"Review code\"}" },
       { type: "function_call_output", call_id: "call_1", output: "{\"id\":\"task_1\"}" },
       { role: "user", content: "proceed" },
+    ]);
+  });
+
+  it("drops tool_result blocks when tool_use_id does not exist", () => {
+    const claudeRequest = {
+      model: "gpt-5.2-codex",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "missing_call", content: "{\"ok\":true}" },
+            { type: "text", text: "continue" },
+          ],
+        },
+      ],
+      max_tokens: 10,
+    } as const;
+
+    const openai = mapClaudeToOpenAI(claudeRequest, "gpt-5.2-codex");
+
+    expect(openai.input).toEqual([
+      { role: "user", content: "continue" },
     ]);
   });
 
@@ -336,5 +441,56 @@ describe("createClaudeStream", () => {
 
     const toolUseCount = sse.split("\"type\":\"tool_use\"").length - 1;
     expect(toolUseCount).toBe(1);
+  });
+
+  it("keeps tool_use stop_reason even when response.completed stop_reason is null", async () => {
+    const openAIStream = createOpenAIDataStream([
+      "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_fc_3\"}}",
+      "{\"type\":\"response.output_item.added\",\"item\":{\"id\":\"fc_3\",\"type\":\"function_call\",\"status\":\"in_progress\",\"arguments\":\"\",\"call_id\":\"call_3\",\"name\":\"WebSearch\"},\"output_index\":0}",
+      "{\"type\":\"response.function_call_arguments.done\",\"arguments\":\"{\\\"query\\\":\\\"Mythos\\\"}\",\"item_id\":\"fc_3\",\"output_index\":0}",
+      "{\"type\":\"response.output_item.done\",\"item\":{\"id\":\"fc_3\",\"type\":\"function_call\",\"status\":\"completed\",\"arguments\":\"{\\\"query\\\":\\\"Mythos\\\"}\",\"call_id\":\"call_3\",\"name\":\"WebSearch\"},\"output_index\":0}",
+      "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fc_3\",\"stop_reason\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}",
+      "[DONE]",
+    ]);
+
+    const claudeStream = await createClaudeStream(openAIStream, "gpt-5.3-codex");
+    const sse = await readStreamToString(claudeStream);
+
+    expect(sse).toContain("\"stop_reason\":\"tool_use\"");
+  });
+
+  it("does not emit tool_use stop_reason for server web_search calls", async () => {
+    const openAIStream = createOpenAIDataStream([
+      "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_ws_1\"}}",
+      "{\"type\":\"response.output_item.added\",\"item\":{\"id\":\"ws_1\",\"type\":\"web_search_call\",\"status\":\"in_progress\"},\"output_index\":0}",
+      "{\"type\":\"response.output_item.done\",\"item\":{\"id\":\"ws_1\",\"type\":\"web_search_call\",\"status\":\"completed\",\"action\":{\"type\":\"search\",\"query\":\"Mythos\"}},\"output_index\":0}",
+      "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_ws_1\",\"output_index\":1,\"content_index\":0,\"delta\":\"I found results.\"}",
+      "{\"type\":\"response.output_text.done\",\"item_id\":\"msg_ws_1\",\"output_index\":1,\"content_index\":0,\"text\":\"I found results.\"}",
+      "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ws_1\",\"stop_reason\":\"stop\",\"output\":[{\"id\":\"ws_1\",\"type\":\"web_search_call\"}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}",
+      "[DONE]",
+    ]);
+
+    const claudeStream = await createClaudeStream(openAIStream, "gpt-5.3-codex");
+    const sse = await readStreamToString(claudeStream);
+
+    expect(sse).not.toContain("\"stop_reason\":\"tool_use\"");
+    expect(sse).not.toContain("\"type\":\"tool_use\"");
+    expect(sse).toContain("\"stop_reason\":\"end_turn\"");
+    expect(sse).toContain("\"server_tool_use\":{\"web_search_requests\":1}");
+  });
+
+  it("defaults streamed stop_reason to end_turn when upstream omits it", async () => {
+    const openAIStream = createOpenAIDataStream([
+      "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_end_turn_stream\"}}",
+      "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_end_turn_stream\",\"output_index\":0,\"content_index\":0,\"delta\":\"Done.\"}",
+      "{\"type\":\"response.output_text.done\",\"item_id\":\"msg_end_turn_stream\",\"output_index\":0,\"content_index\":0,\"text\":\"Done.\"}",
+      "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_end_turn_stream\",\"stop_reason\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}",
+      "[DONE]",
+    ]);
+
+    const claudeStream = await createClaudeStream(openAIStream, "gpt-5.3-codex");
+    const sse = await readStreamToString(claudeStream);
+
+    expect(sse).toContain("\"stop_reason\":\"end_turn\"");
   });
 });

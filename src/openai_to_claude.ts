@@ -1,5 +1,5 @@
 import { patchConsoleWithTimestamps } from "./logger";
-import { logVerbose, safeJsonParse, stringifyToolResult, textFromClaudeContent } from "./common";
+import { dumpStreamMessage, logVerbose, safeJsonParse, stringifyToolResult, textFromClaudeContent } from "./common";
 
 patchConsoleWithTimestamps();
 
@@ -274,6 +274,8 @@ export const GPT5_MODEL_CONFIG: Record<string, { contextWindow: number; maxInput
   "gpt-5-pro": { contextWindow: 1000000, maxInput: 728000, maxOutput: 272000 },
 };
 
+const DEFAULT_MAX_TOKENS = 128000;
+
 const getDownstreamConfig = (model: string) => {
   const modelKey = Object.keys(GPT5_MODEL_CONFIG).find(k => model.includes(k));
   if (modelKey) {
@@ -289,6 +291,8 @@ export const mapFinishReason = (reason: string | null): string | null => {
   if (reason === "tool_calls") return "tool_use";
   return reason;
 };
+
+const finalizeClaudeStopReason = (reason: string | null): string => reason ?? "end_turn";
 
 const sanitizeToolInput = (input: unknown): unknown => {
   if (!input || typeof input !== "object" || Array.isArray(input)) return input;
@@ -363,14 +367,6 @@ export const mapOpenAIToClaude = (openai: OpenAIResponse, model: string): Claude
         content.push({ type: "text", text: block.text });
       } else if (block.type === "function_call" && block.call_id && block.name) {
         content.push({ type: "tool_use", id: block.call_id, name: block.name, input: parseToolArguments(block.arguments) });
-      } else if (block.type === "web_search_call") {
-        const callId = getWebSearchCallId(block);
-        const toolInput = buildWebSearchInput(block);
-        content.push({ type: "tool_use", id: callId, name: "web_search", input: toolInput });
-      } else if (block.type === "web_search_result") {
-        const callId = getWebSearchCallId(block);
-        const resultPayload = block.results ?? block.content ?? block.output ?? block.text;
-        content.push({ type: "tool_result", tool_use_id: callId, content: stringifyToolResult(resultPayload) });
       } else if (block.type === "reasoning" || block.type === "output_reasoning" || block.type === "redacted_reasoning") {
         const mapped = mapReasoningBlockToClaude(block);
         if (mapped) {
@@ -385,14 +381,6 @@ export const mapOpenAIToClaude = (openai: OpenAIResponse, model: string): Claude
     if (item.type === "function_call") {
       const toolInput = parseToolArguments(item.arguments);
       content.push({ type: "tool_use", id: item.call_id, name: item.name, input: toolInput });
-    } else if (item.type === "web_search_call") {
-      const callId = getWebSearchCallId(item);
-      const toolInput = buildWebSearchInput(item);
-      content.push({ type: "tool_use", id: callId, name: "web_search", input: toolInput });
-    } else if (item.type === "web_search_result") {
-      const callId = getWebSearchCallId(item);
-      const resultPayload = item.results ?? item.content ?? item.output ?? item.text;
-      content.push({ type: "tool_result", tool_use_id: callId, content: stringifyToolResult(resultPayload) });
     } else if (item.type === "reasoning" || item.type === "output_reasoning" || item.type === "redacted_reasoning") {
       const mapped = mapReasoningBlockToClaude(item);
       if (mapped) {
@@ -403,9 +391,13 @@ export const mapOpenAIToClaude = (openai: OpenAIResponse, model: string): Claude
   }
 
   let stopReason = mapFinishReason(messageItem?.stop_reason || null);
+  if (!stopReason && content.some((block) => block.type === "tool_use")) {
+    stopReason = "tool_use";
+  }
   if (modelConfig && openai.usage?.output_tokens && openai.usage.output_tokens >= modelConfig.maxOutput) {
     stopReason = "max_tokens";
   }
+  const finalStopReason = finalizeClaudeStopReason(stopReason);
 
   const baseUsage = mapOpenAIUsageToClaude(openai.usage);
   const usage = attachToolUseUsage(baseUsage, webSearchRequests);
@@ -419,7 +411,7 @@ export const mapOpenAIToClaude = (openai: OpenAIResponse, model: string): Claude
     role: "assistant",
     content,
     model,
-    stop_reason: stopReason,
+    stop_reason: finalStopReason,
     stop_sequence: messageItem?.stop_reason ? null : null,
     usage,
   };
@@ -496,6 +488,7 @@ export const mapClaudeToOpenAI = (
   upstreamModel: string,
 ): OpenAIRequest => {
   const messages: OpenAIInputItem[] = [];
+  const knownToolCallIds = new Set<string>();
 
   if (req.system) {
     const systemText = Array.isArray(req.system)
@@ -523,6 +516,12 @@ export const mapClaudeToOpenAI = (
           if (block.text) textBuffer.push(block.text);
         } else if (block.type === "tool_result") {
           flushUserText();
+          if (!knownToolCallIds.has(block.tool_use_id)) {
+            logVerbose("[mapClaudeToOpenAI] Dropping tool_result with unknown tool_use_id", {
+              tool_use_id: block.tool_use_id,
+            });
+            continue;
+          }
           messages.push({
             type: "function_call_output",
             call_id: block.tool_use_id,
@@ -553,6 +552,7 @@ export const mapClaudeToOpenAI = (
           if (block.text) textBlocks.push(block.text);
         } else if (block.type === "tool_use") {
           flushAssistantText();
+          knownToolCallIds.add(block.id);
           messages.push({
             type: "function_call",
             call_id: block.id,
@@ -568,8 +568,13 @@ export const mapClaudeToOpenAI = (
   }
 
   // Responses endpoint expects max_output_tokens (OpenAI/OpenRouter).
+  const modelConfig = getDownstreamConfig(upstreamModel);
+  const requestedMaxTokens = req.max_tokens ?? DEFAULT_MAX_TOKENS;
+  const boundedMaxTokens = modelConfig
+    ? Math.min(requestedMaxTokens, modelConfig.maxOutput)
+    : requestedMaxTokens;
   const tokenParam = {
-    max_output_tokens: req.max_tokens !== undefined ? Math.max(16, req.max_tokens) : undefined,
+    max_output_tokens: Math.max(16, boundedMaxTokens),
   };
 
   const thinkingBudget = req.thinking && "budget_tokens" in req.thinking
@@ -643,6 +648,7 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
       let pendingContentBlockStop: number | null = null;
       let activeTextBlockKey: string | null = null;
       let sawOutputTextDelta = false;
+      let sawIncrementalOutput = false;
       const streamedFunctionCallItemIds = new Set<string>();
       const streamedFunctionCallCallIds = new Set<string>();
       const functionCallBlockIndexByItemId = new Map<string, number>();
@@ -662,6 +668,7 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
       const getWebSearchRequestCount = () => (webSearchCallIds.size > 0 ? webSearchCallIds.size : webSearchFallbackCount);
 
       const send = (event: string, data: unknown) => {
+        dumpStreamMessage(`downstream ${event}`, data);
         controller.enqueue(encoder.encode(`event: ${event}\n`));
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
       };
@@ -730,6 +737,7 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
           index: blockIndex,
           content_block: { type: "tool_use", id: callId, name, input: {} },
         });
+        stopReason = "tool_use";
         pendingContentBlockStop = blockIndex;
         contentBlockIndex++;
         if (item.id) {
@@ -881,6 +889,7 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
           const trimmed = line.trim();
           if (!trimmed.startsWith("data:")) continue;
           const payload = trimmed.replace(/^data:\s*/, "");
+          dumpStreamMessage("upstream openai", payload);
           if (payload === "[DONE]") {
             ensureMessageStart();
             // Send pending content_block_stop if any
@@ -891,7 +900,7 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
             }
             // Send message_delta with usage and stop_reason before message_stop
             const messageDelta: { stop_reason: string | null; usage?: ClaudeUsage } = {
-              stop_reason: stopReason,
+              stop_reason: finalizeClaudeStopReason(stopReason),
             };
             const baseDeltaUsage = mapOpenAIUsageToClaude(usage ?? undefined);
             const deltaUsage = attachToolUseUsage(baseDeltaUsage, getWebSearchRequestCount());
@@ -1023,6 +1032,7 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
               continue;
             }
             sawOutputTextDelta = true;
+            sawIncrementalOutput = true;
             ensureMessageStart(json.id || json.response?.id);
             const blockKey = `${json.item_id ?? json.output_index ?? "0"}:${json.content_index ?? 0}`;
             const blockIndex = ensureTextContentBlock(blockKey);
@@ -1035,6 +1045,7 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
           }
 
           if (json.type === "response.output_text.done") {
+            sawIncrementalOutput = true;
             ensureMessageStart(json.id || json.response?.id);
             const blockKey = `${json.item_id ?? json.output_index ?? "0"}:${json.content_index ?? 0}`;
             const doneText = json.text ?? "";
@@ -1055,6 +1066,7 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
           }
 
           if (json.type === "response.output_item.added") {
+            sawIncrementalOutput = true;
             const item = json.item;
             if (item?.type === "function_call") {
               startFunctionCallContentBlock(item);
@@ -1081,8 +1093,10 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
           }
 
           if (json.type === "response.output_item.done") {
+            sawIncrementalOutput = true;
             const item = json.item;
             if (item?.type === "function_call" && item.id) {
+              stopReason = "tool_use";
               if (item.arguments) {
                 const alreadySent = functionCallHasArgumentDeltaByItemId.get(item.id) === true;
                 if (!alreadySent) {
@@ -1096,13 +1110,19 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
 
           // Extract stop_reason and usage from upstream events
           if (json.stop_reason !== undefined) {
-            stopReason = mapFinishReason(json.stop_reason);
+            const mapped = mapFinishReason(json.stop_reason);
+            if (mapped !== null) {
+              stopReason = mapped;
+            }
           }
           if (json.usage) {
             usage = json.usage;
           }
           if (json.response?.stop_reason !== undefined) {
-            stopReason = mapFinishReason(json.response.stop_reason);
+            const mapped = mapFinishReason(json.response.stop_reason);
+            if (mapped !== null) {
+              stopReason = mapped;
+            }
           }
           if (json.response?.usage) {
             usage = json.response.usage;
@@ -1112,7 +1132,10 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
           if (outputItems) {
             for (const item of outputItems) {
               if (item.stop_reason !== undefined) {
-                stopReason = mapFinishReason(item.stop_reason);
+                const mapped = mapFinishReason(item.stop_reason);
+                if (mapped !== null) {
+                  stopReason = mapped;
+                }
               }
               if (item.type === "web_search_call" || item.type === "web_search_result") {
                 recordWebSearch(item);
@@ -1134,7 +1157,7 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
             }
           }
 
-  if (outputItems) {
+  if (outputItems && !(json.type === "response.completed" && sawIncrementalOutput)) {
     ensureMessageStart(json.id || json.response?.id);
     for (const item of outputItems) {
       if (item.type === "message" && item.content) {
@@ -1161,50 +1184,8 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
             contentBlockIndex++;
           } else if (handleReasoningBlock(contentBlock)) {
             continue;
-          } else if (contentBlock.type === "web_search_call") {
+          } else if (contentBlock.type === "web_search_call" || contentBlock.type === "web_search_result") {
             recordWebSearch(contentBlock);
-            if (pendingContentBlockStop !== null) {
-              send("content_block_stop", { type: "content_block_stop", index: pendingContentBlockStop });
-            }
-            const callId = getWebSearchCallId(contentBlock);
-            const toolInput = buildWebSearchInput(contentBlock);
-            send("content_block_start", {
-              type: "content_block_start",
-              index: contentBlockIndex,
-              content_block: { type: "tool_use", id: callId, name: "web_search", input: {} },
-            });
-            const partialJson = contentBlock.arguments || (toolInput && Object.keys(toolInput as Record<string, unknown>).length > 0 ? JSON.stringify(toolInput) : "");
-            if (partialJson) {
-              send("content_block_delta", {
-                type: "content_block_delta",
-                index: contentBlockIndex,
-                delta: { type: "input_json_delta", partial_json: partialJson },
-              });
-            }
-            pendingContentBlockStop = contentBlockIndex;
-            contentBlockIndex++;
-          } else if (contentBlock.type === "web_search_result") {
-            recordWebSearch(contentBlock);
-            if (pendingContentBlockStop !== null) {
-              send("content_block_stop", { type: "content_block_stop", index: pendingContentBlockStop });
-            }
-            const callId = getWebSearchCallId(contentBlock);
-            const resultPayload = contentBlock.results ?? contentBlock.content ?? contentBlock.output ?? contentBlock.text;
-            const resultText = stringifyToolResult(resultPayload);
-            send("content_block_start", {
-              type: "content_block_start",
-              index: contentBlockIndex,
-              content_block: { type: "tool_result", tool_use_id: callId, content: "" },
-            });
-            if (resultText) {
-              send("content_block_delta", {
-                type: "content_block_delta",
-                index: contentBlockIndex,
-                delta: { type: "text_delta", text: resultText },
-              });
-            }
-            pendingContentBlockStop = contentBlockIndex;
-            contentBlockIndex++;
           }
         }
       } else if (item.type === "function_call" && item.call_id && item.name) {
@@ -1234,49 +1215,8 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
         contentBlockIndex++;
       } else if (handleReasoningBlock(item)) {
         continue;
-      } else if (item.type === "web_search_call") {
+      } else if (item.type === "web_search_call" || item.type === "web_search_result") {
         recordWebSearch(item);
-        if (pendingContentBlockStop !== null) {
-          send("content_block_stop", { type: "content_block_stop", index: pendingContentBlockStop });
-        }
-        const callId = getWebSearchCallId(item);
-        const toolInput = buildWebSearchInput(item);
-        send("content_block_start", {
-          type: "content_block_start",
-          index: contentBlockIndex,
-          content_block: { type: "tool_use", id: callId, name: "web_search", input: {} },
-        });
-        const partialJson = item.arguments || (toolInput && Object.keys(toolInput as Record<string, unknown>).length > 0 ? JSON.stringify(toolInput) : "");
-        if (partialJson) {
-          send("content_block_delta", {
-            type: "content_block_delta",
-            index: contentBlockIndex,
-            delta: { type: "input_json_delta", partial_json: partialJson },
-          });
-        }
-        pendingContentBlockStop = contentBlockIndex;
-        contentBlockIndex++;
-      } else if (item.type === "web_search_result") {
-        if (pendingContentBlockStop !== null) {
-          send("content_block_stop", { type: "content_block_stop", index: pendingContentBlockStop });
-        }
-        const callId = getWebSearchCallId(item);
-        const resultPayload = item.results ?? item.content ?? item.output ?? item.text;
-        const resultText = stringifyToolResult(resultPayload);
-        send("content_block_start", {
-          type: "content_block_start",
-          index: contentBlockIndex,
-          content_block: { type: "tool_result", tool_use_id: callId, content: "" },
-        });
-        if (resultText) {
-          send("content_block_delta", {
-            type: "content_block_delta",
-            index: contentBlockIndex,
-            delta: { type: "text_delta", text: resultText },
-          });
-        }
-        pendingContentBlockStop = contentBlockIndex;
-        contentBlockIndex++;
       }
     }
   }
@@ -1320,7 +1260,7 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
       }
       // Send message_delta with usage and stop_reason before closing
       const messageDelta: { stop_reason: string | null; usage?: ClaudeUsage } = {
-        stop_reason: stopReason,
+        stop_reason: finalizeClaudeStopReason(stopReason),
       };
       const baseDeltaUsage = mapOpenAIUsageToClaude(usage ?? undefined);
       const deltaUsage = attachToolUseUsage(baseDeltaUsage, getWebSearchRequestCount());
