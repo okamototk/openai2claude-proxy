@@ -112,7 +112,8 @@ const mapToolChoiceToGemini = (toolChoice: ClaudeRequest["tool_choice"]) => {
   return undefined;
 };
 
-const coerceToolResult = (content: string): unknown => {
+const coerceToolResult = (content: unknown): unknown => {
+  if (typeof content !== "string") return content ?? {};
   const parsed = safeJsonParse(content);
   if (parsed !== null) return parsed;
   return { result: content };

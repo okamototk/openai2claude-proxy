@@ -6,7 +6,7 @@ patchConsoleWithTimestamps();
 type ClaudeMessageContent =
   | { type: "text"; text: string }
   | { type: "tool_use"; id: string; name: string; input: unknown }
-  | { type: "tool_result"; tool_use_id: string; content: string }
+  | { type: "tool_result"; tool_use_id: string; content: unknown }
   | { type: "thinking"; thinking: string; signature?: string }
   | { type: "redacted_thinking"; data: string; signature?: string }
   | { type: "image"; source: { type: string; media_type?: string; data?: string; url?: string } };
@@ -440,9 +440,9 @@ const extractToolResults = (content: ClaudeMessage["content"]) => {
   const resultBlocks = content.filter((block) => block.type === "tool_result") as Array<{
     type: "tool_result";
     tool_use_id: string;
-    content: string;
+    content: unknown;
   }>;
-  return resultBlocks.map((block) => ({ tool_call_id: block.tool_use_id, content: block.content }));
+  return resultBlocks.map((block) => ({ tool_call_id: block.tool_use_id, content: stringifyToolResult(block.content) }));
 };
 
 const mapThinkingBlockToOpenAI = (_block: ClaudeMessageContent): OpenAIOutputContentBlock | null => {
@@ -526,7 +526,7 @@ export const mapClaudeToOpenAI = (
           messages.push({
             type: "function_call_output",
             call_id: block.tool_use_id,
-            output: block.content ?? "",
+            output: stringifyToolResult(block.content),
           });
         }
       }

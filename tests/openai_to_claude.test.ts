@@ -321,6 +321,34 @@ describe("mapClaudeToOpenAI", () => {
     ]);
   });
 
+  it("stringifies structured tool result content for Responses API", () => {
+    const claudeRequest = {
+      model: "gpt-5.2-codex",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "call_1", name: "ToolSearch", input: { query: "select:WebFetch" } },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "call_1", content: [{ type: "tool_reference", tool_name: "WebFetch" }] },
+          ],
+        },
+      ],
+      max_tokens: 10,
+    } as const;
+
+    const openai = mapClaudeToOpenAI(claudeRequest, "gpt-5.2-codex");
+
+    expect(openai.input).toEqual([
+      { type: "function_call", call_id: "call_1", name: "ToolSearch", arguments: "{\"query\":\"select:WebFetch\"}" },
+      { type: "function_call_output", call_id: "call_1", output: "[{\"type\":\"tool_reference\",\"tool_name\":\"WebFetch\"}]" },
+    ]);
+  });
+
   it("drops tool_result blocks when tool_use_id does not exist", () => {
     const claudeRequest = {
       model: "gpt-5.2-codex",
