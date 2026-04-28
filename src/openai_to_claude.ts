@@ -906,18 +906,22 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
               activeTextBlockKey = null;
             }
             // Send message_delta with usage and stop_reason before message_stop
-            const messageDelta: { stop_reason: string | null; usage?: ClaudeUsage } = {
+            const messageDelta: { stop_reason: string | null } = {
               stop_reason: finalizeClaudeStopReason(stopReason),
+            };
+            const messageDeltaEvent: { type: "message_delta"; delta: typeof messageDelta; usage?: ClaudeUsage } = {
+              type: "message_delta",
+              delta: messageDelta,
             };
             const baseDeltaUsage = mapOpenAIUsageToClaude(usage ?? undefined);
             const deltaUsage = attachToolUseUsage(baseDeltaUsage, getWebSearchRequestCount());
             if (deltaUsage) {
-              messageDelta.usage = deltaUsage;
+              messageDeltaEvent.usage = deltaUsage;
             }
             if (!usage) {
               console.log("[messages] Upstream response missing usage; downstream usage may be zero");
             }
-            send("message_delta", { type: "message_delta", delta: messageDelta });
+            send("message_delta", messageDeltaEvent);
             send("message_stop", { type: "message_stop" });
             controller.close();
             return;
@@ -1240,18 +1244,22 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
             pendingContentBlockStop = null;
             activeTextBlockKey = null;
           }
-          const messageDelta: { stop_reason: string | null; usage?: ClaudeUsage } = {
+          const messageDelta: { stop_reason: string | null } = {
             stop_reason: stopReason,
+          };
+          const messageDeltaEvent: { type: "message_delta"; delta: typeof messageDelta; usage?: ClaudeUsage } = {
+            type: "message_delta",
+            delta: messageDelta,
           };
           const baseDeltaUsage = mapOpenAIUsageToClaude(usage ?? undefined);
           const deltaUsage = attachToolUseUsage(baseDeltaUsage, getWebSearchRequestCount());
           if (deltaUsage) {
-            messageDelta.usage = deltaUsage;
+            messageDeltaEvent.usage = deltaUsage;
           }
           if (!usage) {
             console.log("[messages] Upstream response missing usage; downstream usage may be zero");
           }
-          send("message_delta", { type: "message_delta", delta: messageDelta });
+          send("message_delta", messageDeltaEvent);
           send("message_stop", { type: "message_stop" });
           controller.close();
           return;
@@ -1266,15 +1274,19 @@ export const createClaudeStream = async (openaiStream: ReadableStream<Uint8Array
         activeTextBlockKey = null;
       }
       // Send message_delta with usage and stop_reason before closing
-      const messageDelta: { stop_reason: string | null; usage?: ClaudeUsage } = {
+      const messageDelta: { stop_reason: string | null } = {
         stop_reason: finalizeClaudeStopReason(stopReason),
+      };
+      const messageDeltaEvent: { type: "message_delta"; delta: typeof messageDelta; usage?: ClaudeUsage } = {
+        type: "message_delta",
+        delta: messageDelta,
       };
       const baseDeltaUsage = mapOpenAIUsageToClaude(usage ?? undefined);
       const deltaUsage = attachToolUseUsage(baseDeltaUsage, getWebSearchRequestCount());
       if (deltaUsage) {
-        messageDelta.usage = deltaUsage;
+        messageDeltaEvent.usage = deltaUsage;
       }
-      send("message_delta", { type: "message_delta", delta: messageDelta });
+      send("message_delta", messageDeltaEvent);
       send("message_stop", { type: "message_stop" });
       controller.close();
     },

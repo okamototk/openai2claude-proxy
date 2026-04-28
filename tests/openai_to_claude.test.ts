@@ -489,6 +489,8 @@ describe("createClaudeStream", () => {
     expect(sse).toContain("\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_1\",\"name\":\"Bash\",\"input\":{}}}");
     expect(sse).toContain("\"partial_json\":\"{\\\"command\\\":\\\"git status\\\"}\"");
     expect(sse).toContain("\"stop_reason\":\"tool_use\"");
+    expect(sse).toContain("\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"input_tokens\":1,\"output_tokens\":1}");
+    expect(sse).not.toContain("\"delta\":{\"stop_reason\":\"tool_use\",\"usage\"");
   });
 
   it("does not duplicate tool_use blocks when response.completed also includes output", async () => {
@@ -542,6 +544,7 @@ describe("createClaudeStream", () => {
     expect(sse).not.toContain("\"type\":\"tool_use\"");
     expect(sse).toContain("\"stop_reason\":\"end_turn\"");
     expect(sse).toContain("\"server_tool_use\":{\"web_search_requests\":1}");
+    expect(sse).toContain("\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"server_tool_use\":{\"web_search_requests\":1}}");
   });
 
   it("defaults streamed stop_reason to end_turn when upstream omits it", async () => {

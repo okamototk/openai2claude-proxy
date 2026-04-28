@@ -374,12 +374,16 @@ export const createClaudeStreamFromGemini = async (geminiStream: ReadableStream<
           dumpStreamMessage("upstream gemini", payload);
           if (payload === "[DONE]") {
             closePendingBlock();
-            const messageDelta: { stop_reason: string | null; usage?: ClaudeUsage } = {
+            const messageDelta: { stop_reason: string | null } = {
               stop_reason: stopReason,
             };
+            const messageDeltaEvent: { type: "message_delta"; delta: typeof messageDelta; usage?: ClaudeUsage } = {
+              type: "message_delta",
+              delta: messageDelta,
+            };
             const mappedUsage = mapGeminiUsageToClaude(usage ?? undefined);
-            if (mappedUsage) messageDelta.usage = mappedUsage;
-            send("message_delta", { type: "message_delta", delta: messageDelta });
+            if (mappedUsage) messageDeltaEvent.usage = mappedUsage;
+            send("message_delta", messageDeltaEvent);
             send("message_stop", { type: "message_stop" });
             controller.close();
             return;
@@ -407,12 +411,16 @@ export const createClaudeStreamFromGemini = async (geminiStream: ReadableStream<
       }
 
       closePendingBlock();
-      const messageDelta: { stop_reason: string | null; usage?: ClaudeUsage } = {
+      const messageDelta: { stop_reason: string | null } = {
         stop_reason: stopReason,
       };
+      const messageDeltaEvent: { type: "message_delta"; delta: typeof messageDelta; usage?: ClaudeUsage } = {
+        type: "message_delta",
+        delta: messageDelta,
+      };
       const mappedUsage = mapGeminiUsageToClaude(usage ?? undefined);
-      if (mappedUsage) messageDelta.usage = mappedUsage;
-      send("message_delta", { type: "message_delta", delta: messageDelta });
+      if (mappedUsage) messageDeltaEvent.usage = mappedUsage;
+      send("message_delta", messageDeltaEvent);
       send("message_stop", { type: "message_stop" });
       controller.close();
     },
