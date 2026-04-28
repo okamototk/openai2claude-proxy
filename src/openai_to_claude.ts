@@ -486,6 +486,7 @@ const mapToolChoiceToOpenAI = (
 export const mapClaudeToOpenAI = (
   req: ClaudeRequest,
   upstreamModel: string,
+  options: { injectWebSearchTool?: boolean } = {},
 ): OpenAIRequest => {
   const messages: OpenAIInputItem[] = [];
   const knownToolCallIds = new Set<string>();
@@ -593,6 +594,39 @@ export const mapClaudeToOpenAI = (
     logReasoning("mapClaudeToOpenAI.request", reasoning);
   }
 
+  const tools = req.tools?.filter((tool) => {
+    if (!tool.name) {
+      console.log("[mapClaudeToOpenAI] Filtering out tool without name:", JSON.stringify(tool, null, 2));
+      return false;
+    }
+    return true;
+  }).map((tool) => {
+    if (tool.name === "web_search" || tool.type === "web_search") {
+      const { max_results, search_context_size, user_location } = extractWebSearchToolConfig(tool);
+      logVerbose("[mapClaudeToOpenAI] Mapping web_search tool:", {
+        max_results,
+        search_context_size,
+        user_location,
+      });
+      return {
+        type: "web_search" as const,
+        ...(max_results !== undefined ? { max_results } : {}),
+        ...(search_context_size !== undefined ? { search_context_size } : {}),
+        ...(user_location !== undefined ? { user_location } : {}),
+      };
+    }
+    return {
+      type: "function" as const,
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.input_schema,
+    };
+  }) ?? [];
+
+  if (options.injectWebSearchTool && !tools.some((tool) => tool.type === "web_search")) {
+    tools.push({ type: "web_search" });
+  }
+
   return {
     model: upstreamModel,
     input: messages,
@@ -600,34 +634,7 @@ export const mapClaudeToOpenAI = (
     temperature: req.temperature,
     top_p: req.top_p,
     stream: req.stream,
-    tools: req.tools?.filter((tool) => {
-      if (!tool.name) {
-        console.log("[mapClaudeToOpenAI] Filtering out tool without name:", JSON.stringify(tool, null, 2));
-        return false;
-      }
-      return true;
-    }).map((tool) => {
-      if (tool.name === "web_search" || tool.type === "web_search") {
-        const { max_results, search_context_size, user_location } = extractWebSearchToolConfig(tool);
-        logVerbose("[mapClaudeToOpenAI] Mapping web_search tool:", {
-          max_results,
-          search_context_size,
-          user_location,
-        });
-        return {
-          type: "web_search",
-          ...(max_results !== undefined ? { max_results } : {}),
-          ...(search_context_size !== undefined ? { search_context_size } : {}),
-          ...(user_location !== undefined ? { user_location } : {}),
-        };
-      }
-      return {
-        type: "function",
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.input_schema,
-      };
-    }),
+    ...(tools.length > 0 ? { tools } : {}),
     tool_choice: mapToolChoiceToOpenAI(req.tool_choice, req.tools),
     ...(Object.keys(reasoning).length > 0 ? { reasoning } : {}),
   };

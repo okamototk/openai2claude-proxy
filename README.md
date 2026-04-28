@@ -59,6 +59,7 @@ Optional overrides:
 - `PORT` (default `3000`)
 - `BIND_ADDRESS` (default `127.0.0.1`)
 - `VERBOSE_LOGGING` (`true` to enable request/response logging)
+- `PROXY_AUTO_WEB_SEARCH` (default `true`; set `false` to disable OpenAI server-side `web_search` injection)
 
 ## Run
 ```bash
@@ -79,6 +80,31 @@ export ANTHROPIC_API_KEY=local
 ```bash
 claude --model gpt-5.2-codex
 ```
+
+### Web search hangs: quick fix
+If Claude Code gets stuck after showing a `Web Search(...)` tool call, apply this checklist:
+
+1. Use the latest Claude Code:
+```bash
+bun install -g @anthropic-ai/claude-code@latest
+```
+2. Enable tool search explicitly for custom proxy base URLs:
+```bash
+export ENABLE_TOOL_SEARCH=true
+```
+3. Prefer compatibility mapping when using GPT-5.3 codex upstream:
+```bash
+bun src/index.ts --model gpt-5.3-codex:gpt-5.2-codex
+```
+4. Verify stream markers in `server.log` for a healthy web-search roundtrip:
+   - first response ends with `"stop_reason":"tool_use"`
+   - web-search tool request is sent
+   - second response ends with `"stop_reason":"end_turn"`
+   - downstream emits `message_stop`
+
+The proxy now logs a startup warning when `ANTHROPIC_BASE_URL` points to a non-Anthropic host and `ENABLE_TOOL_SEARCH` is not set.
+
+Proxy-side workaround: `PROXY_AUTO_WEB_SEARCH` defaults to `true` when using `PROVIDER=openai`. This lets the upstream OpenAI Responses API use server-side `web_search` even if Claude Code fails to load its local WebSearch schema. Set `PROXY_AUTO_WEB_SEARCH=false` to disable it if web search changes behavior or incurs unwanted tool-use costs.
 
 ## Endpoints
 - `GET /health`

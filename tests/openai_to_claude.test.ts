@@ -370,6 +370,43 @@ describe("mapClaudeToOpenAI", () => {
 
     expect(openai.tool_choice).toEqual({ type: "function", name: "calculator" });
   });
+
+  it("can inject OpenAI server web_search when Claude Code omits the tool", () => {
+    const claudeRequest = {
+      model: "gpt-5.3-codex",
+      messages: [{ role: "user", content: "web search Mythos" }],
+      max_tokens: 64,
+    } as const;
+
+    const openai = mapClaudeToOpenAI(claudeRequest, "gpt-5.3-codex", { injectWebSearchTool: true });
+
+    expect(openai.tools).toEqual([{ type: "web_search" }]);
+  });
+
+  it("does not inject web_search unless enabled", () => {
+    const claudeRequest = {
+      model: "gpt-5.3-codex",
+      messages: [{ role: "user", content: "hello" }],
+      max_tokens: 64,
+    } as const;
+
+    const openai = mapClaudeToOpenAI(claudeRequest, "gpt-5.3-codex");
+
+    expect(openai.tools).toBeUndefined();
+  });
+
+  it("does not duplicate injected web_search tools", () => {
+    const claudeRequest = {
+      model: "gpt-5.3-codex",
+      messages: [{ role: "user", content: "search mythos" }],
+      tools: [{ name: "web_search", type: "web_search" }],
+      max_tokens: 64,
+    } as const;
+
+    const openai = mapClaudeToOpenAI(claudeRequest, "gpt-5.3-codex", { injectWebSearchTool: true });
+
+    expect(openai.tools).toEqual([{ type: "web_search" }]);
+  });
 });
 
 describe("createClaudeStream", () => {
@@ -492,5 +529,41 @@ describe("createClaudeStream", () => {
     const sse = await readStreamToString(claudeStream);
 
     expect(sse).toContain("\"stop_reason\":\"end_turn\"");
+  });
+
+  it("handles web-search roundtrip as tool_use then end_turn", async () => {
+    const toolDispatchStream = createOpenAIDataStream([
+      "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_tool_dispatch\"}}",
+      "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_tool_dispatch\",\"output_index\":0,\"content_index\":0,\"delta\":\"I will search now.\"}",
+      "{\"type\":\"response.output_text.done\",\"item_id\":\"msg_tool_dispatch\",\"output_index\":0,\"content_index\":0,\"text\":\"I will search now.\"}",
+      "{\"type\":\"response.output_item.added\",\"item\":{\"id\":\"fc_tool_dispatch\",\"type\":\"function_call\",\"status\":\"in_progress\",\"arguments\":\"\",\"call_id\":\"call_websearch_1\",\"name\":\"WebSearch\"},\"output_index\":1}",
+      "{\"type\":\"response.function_call_arguments.done\",\"arguments\":\"{\\\"query\\\":\\\"Mythos\\\"}\",\"item_id\":\"fc_tool_dispatch\",\"output_index\":1}",
+      "{\"type\":\"response.output_item.done\",\"item\":{\"id\":\"fc_tool_dispatch\",\"type\":\"function_call\",\"status\":\"completed\",\"arguments\":\"{\\\"query\\\":\\\"Mythos\\\"}\",\"call_id\":\"call_websearch_1\",\"name\":\"WebSearch\"},\"output_index\":1}",
+      "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_tool_dispatch\",\"stop_reason\":\"tool_calls\",\"usage\":{\"input_tokens\":5,\"output_tokens\":3}}}",
+      "[DONE]",
+    ]);
+
+    const toolDispatchClaudeStream = await createClaudeStream(toolDispatchStream, "gpt-5.3-codex");
+    const toolDispatchSse = await readStreamToString(toolDispatchClaudeStream);
+
+    expect(toolDispatchSse).toContain("\"stop_reason\":\"tool_use\"");
+    expect(toolDispatchSse).toContain("\"type\":\"tool_use\"");
+
+    const webSearchResultStream = createOpenAIDataStream([
+      "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_websearch_result\"}}",
+      "{\"type\":\"response.output_item.added\",\"item\":{\"id\":\"ws_1\",\"type\":\"web_search_call\",\"status\":\"in_progress\"},\"output_index\":0}",
+      "{\"type\":\"response.output_item.done\",\"item\":{\"id\":\"ws_1\",\"type\":\"web_search_call\",\"status\":\"completed\",\"action\":{\"type\":\"search\",\"query\":\"Mythos\"}},\"output_index\":0}",
+      "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_websearch_result\",\"output_index\":1,\"content_index\":0,\"delta\":\"Top result is Merriam-Webster.\"}",
+      "{\"type\":\"response.output_text.done\",\"item_id\":\"msg_websearch_result\",\"output_index\":1,\"content_index\":0,\"text\":\"Top result is Merriam-Webster.\"}",
+      "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_websearch_result\",\"stop_reason\":\"stop\",\"usage\":{\"input_tokens\":7,\"output_tokens\":9},\"output\":[{\"id\":\"ws_1\",\"type\":\"web_search_call\"}]}}",
+      "[DONE]",
+    ]);
+
+    const webSearchResultClaudeStream = await createClaudeStream(webSearchResultStream, "gpt-5.3-codex");
+    const webSearchResultSse = await readStreamToString(webSearchResultClaudeStream);
+
+    expect(webSearchResultSse).toContain("Top result is Merriam-Webster.");
+    expect(webSearchResultSse).toContain("\"stop_reason\":\"end_turn\"");
+    expect(webSearchResultSse).toContain("\"server_tool_use\":{\"web_search_requests\":1}");
   });
 });

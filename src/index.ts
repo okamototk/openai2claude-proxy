@@ -284,7 +284,9 @@ const handleMessages = async (req: Request) => {
     return jsonResponse(claudeData);
   }
 
-  const openaiPayload = mapClaudeToOpenAI(payload, mapping.upstream);
+  const openaiPayload = mapClaudeToOpenAI(payload, mapping.upstream, {
+    injectWebSearchTool: CONFIG.proxyAutoWebSearch && CONFIG.provider === "openai",
+  });
 
   logVerbose("----------------------");
   logVerbose("[messages] Upstream request parameters:", JSON.stringify(openaiPayload, null, 2));
@@ -519,6 +521,38 @@ const checkToolChoiceSupport = async () => {
   }
 };
 
+const isToolSearchEnabled = (value: string | undefined) => {
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1"
+    || normalized === "true"
+    || normalized === "yes"
+    || normalized === "on"
+    || normalized === "auto"
+    || normalized.startsWith("auto:");
+};
+
+const isFirstPartyAnthropicHost = (baseUrl: string) => {
+  try {
+    const hostname = new URL(baseUrl).hostname.toLowerCase();
+    return hostname === "api.anthropic.com" || hostname.endsWith(".anthropic.com");
+  } catch {
+    return false;
+  }
+};
+
+const warnClaudeCodeToolSearchConfig = () => {
+  const anthropicBaseUrl = process.env.ANTHROPIC_BASE_URL;
+  if (!anthropicBaseUrl) return;
+  if (isFirstPartyAnthropicHost(anthropicBaseUrl)) return;
+  if (isToolSearchEnabled(process.env.ENABLE_TOOL_SEARCH)) return;
+
+  console.warn(
+    "[startup] Claude Code tool search may be disabled for custom ANTHROPIC_BASE_URL. " +
+      "Set ENABLE_TOOL_SEARCH=true (or auto) to reduce web-search/tool hangs when using a proxy."
+  );
+};
+
 const createServer = () => Bun.serve({
   hostname: CONFIG.bindAddress,
   port: CONFIG.port,
@@ -546,6 +580,7 @@ const createServer = () => Bun.serve({
 const startServer = async () => {
   await checkUpstreamModels();
   await checkToolChoiceSupport();
+  warnClaudeCodeToolSearchConfig();
   const server = createServer();
   console.log("Proxy config:", JSON.stringify(getPublicConfig(CONFIG, upstream), null, 2));
   console.log(`openai2claude-proxy listening on http://${CONFIG.bindAddress}:${server.port}`);

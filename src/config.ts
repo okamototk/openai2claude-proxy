@@ -17,6 +17,7 @@ export type Config = {
   port: number;
   bindAddress: string;
   verboseLogging: boolean;
+  proxyAutoWebSearch: boolean;
 };
 
 const DEFAULT_OPENAI_MODEL_NAME = "gpt-5.2-codex";
@@ -119,6 +120,7 @@ export const buildConfig = (env: Record<string, string | undefined>, argv: strin
     port: Number(env.PORT || "3000"),
     bindAddress: env.BIND_ADDRESS || "127.0.0.1",
     verboseLogging: (env.VERBOSE_LOGGING || "").toLowerCase() === "true",
+    proxyAutoWebSearch: (env.PROXY_AUTO_WEB_SEARCH ?? "true").toLowerCase() === "true",
   };
 };
 
@@ -157,4 +159,5 @@ export const getPublicConfig = (config: Config, upstream: { apiKey: string }) =>
   bindAddress: config.bindAddress,
   hasUpstreamApiKey: Boolean(upstream.apiKey),
   verboseLogging: config.verboseLogging,
+  proxyAutoWebSearch: config.proxyAutoWebSearch,
 });
